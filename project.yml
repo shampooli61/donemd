@@ -1,0 +1,218 @@
+name: donemd
+
+options:
+  bundleIdPrefix: com.shampoo
+  deploymentTarget:
+    macOS: "13.0"
+  defaultConfig: Debug
+  # Ship as a Simplified-Chinese-first app: this makes zh-Hans the primary
+  # localization so AppKit renders the standard menus (文件 / 编辑 / 显示 /
+  # 窗口 / 帮助 + 关于 / 服务 / 隐藏 / 退出…) in Chinese instead of English.
+  # Our custom menus (格式 / 飞书 / 写作背景) were already Chinese; this fixes
+  # the top-level *system* menu titles, which AppKit was rendering in English
+  # because the bundle declared no zh-Hans localization.
+  developmentLanguage: zh-Hans
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "2"
+
+packages:
+  swift-markdown:
+    url: https://github.com/swiftlang/swift-markdown
+    from: 0.4.0
+  Yams:
+    url: https://github.com/jpsim/Yams
+    from: 5.1.3
+  # Sparkle — in-app auto-update (Developer ID + notarization required for the
+  # signed feed to install). EdDSA-signed appcast hosted on GitHub Pages; see
+  # scripts/build-release.sh and docs/notes/sparkle-release.md.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
+
+targets:
+  donemd:
+    type: application
+    platform: macOS
+    sources:
+      - donemd
+      - path: Resources/Web
+        type: folder
+        buildPhase: resources
+        name: Web Bundle
+    dependencies:
+      - package: swift-markdown
+        product: Markdown
+      - package: Yams
+        product: Yams
+      - package: Sparkle
+        product: Sparkle
+    preBuildScripts:
+      - script: |
+          set -e
+          # Xcode runs scripts with a sanitized PATH that lacks Node/npm.
+          # Add common Node install locations.
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          if ! command -v npm >/dev/null 2>&1; then
+            echo "error: npm not found in PATH. Install Node.js: https://nodejs.org or 'brew install node'"
+            exit 1
+          fi
+          cd "$SRCROOT/web"
+          if [ ! -d node_modules ]; then
+            echo "→ Running npm install (first build)..."
+            npm install
+          fi
+          npm run build
+        name: Build Web Bundle
+        basedOnDependencyAnalysis: false
+    info:
+      path: donemd/Info.plist
+      properties:
+        # System-facing app name = Chinese primary name「马上做完」(Dock hover,
+        # Finder, About panel via CFBundleDisplayName; the top menu-bar app name
+        # via CFBundleName). The English wordmark "Done.md" lives only in the
+        # icon art (伴随传播), not the system name — keeps 中文为主 in the OS.
+        # Note: the .app filename / PRODUCT_NAME stays `donemd` (technical id).
+        CFBundleDisplayName: 马上做完
+        CFBundleName: 马上做完
+        # Declare zh-Hans (primary) + en as supported app localizations. Without
+        # this the bundle advertises only English, so AppKit renders the standard
+        # system menus (文件 / 编辑 / 显示 / 窗口 / 帮助 …) in English even on a
+        # Chinese-locale Mac. Listing zh-Hans first makes it the fallback/primary.
+        CFBundleLocalizations:
+          - zh-Hans
+          - en
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHumanReadableCopyright: ""
+        # Sparkle auto-update. SUFeedURL points at the EdDSA-signed appcast on
+        # GitHub Pages; SUPublicEDKey is the Ed25519 public half (private key
+        # kept offline, used by build-release.sh to sign each update). The key
+        # below is a PLACEHOLDER — replaced by the real public key that
+        # `generate_keys` emits (see docs/notes/sparkle-release.md). Auto-update
+        # only fully works on Developer ID-signed + notarized builds.
+        SUFeedURL: https://shampooli61.github.io/donemd/appcast.xml
+        SUPublicEDKey: I598yoXx7vAaVUSCCQSCiU24F2DpCaiGrSp07lw7eds=
+        SUEnableInstallerLauncherService: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Markdown Document
+            CFBundleTypeRole: Editor
+            NSDocumentClass: $(PRODUCT_MODULE_NAME).DonemdDocument
+            LSItemContentTypes:
+              - net.daringfireball.markdown
+              - public.plain-text
+            LSHandlerRank: Alternate
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: net.daringfireball.markdown
+            UTTypeDescription: Markdown Document
+            UTTypeConformsTo:
+              - public.plain-text
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - md
+                - markdown
+              public.mime-type:
+                - text/markdown
+        # No custom URL scheme registration here — Feishu's open platform
+        # rejects custom-scheme redirect URIs (only http/https accepted
+        # since 2023). v2-2B-2 uses an http loopback redirect on a pinned
+        # port (gh / gcloud / rclone all use this same pattern); the local
+        # server inside FeishuOAuthClient handles the callback, no macOS
+        # URL dispatch needed.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd
+        ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      # Debug-only: sign with a STABLE self-signed identity instead of the
+      # ad-hoc signature xcodebuild falls back to (Automatic style + no team +
+      # 0 identities → ad-hoc). Ad-hoc's code-directory hash changes on every
+      # rebuild, so the Keychain ACL's "Always Allow" (keyed to the app's
+      # designated requirement) never matches the next build → the user gets
+      # re-prompted for every credential on every launch. A fixed identity
+      # gives a stable designated requirement so "Always Allow" sticks and
+      # items recreated under it read silently. Create the cert once via
+      # Keychain Access → Certificate Assistant → Create a Certificate
+      # (name "Done.md Dev", type Code Signing, self-signed root); verify with
+      # `security find-identity -v -p codesigning`. Hardened runtime stays ON
+      # (only matters for notarization/distribution, not local run). Release/
+      # archive is untouched — the tester DMG stays ad-hoc until real
+      # Developer ID + notarization (see scripts/build-release.sh).
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Done.md Dev"
+          CODE_SIGNING_REQUIRED: YES
+          CODE_SIGNING_ALLOWED: YES
+          DEVELOPMENT_TEAM: ""
+          # Xcode 16 defaults ENABLE_DEBUG_DYLIB=YES, which splits out a
+          # donemd.debug.dylib (for Previews / hot-reload). dyld refuses to
+          # load it when the main binary and the dylib have mismatched Team
+          # IDs — and a self-signed identity has NO team id, which trips this
+          # check ("different Team IDs") and the app fails to launch. We don't
+          # use Preview injection for the run-the-app workflow, so disable the
+          # split: the main binary stays monolithic and launches under the
+          # self-signed identity. (Automatic/ad-hoc builds sidestep this; it
+          # only bites once we sign Debug with a real, teamless identity.)
+          ENABLE_DEBUG_DYLIB: NO
+          # Turn OFF hardened runtime in Debug. Hardened runtime enforces
+          # *library validation*: the process may only load code that is a
+          # platform binary or shares the host's Team ID. Our self-signed
+          # "Done.md Dev" identity has NO team id, and dyld treats "no team
+          # ID" as a mismatch for non-platform code — so the injected
+          # donemdTests.xctest (same identity, also teamless) is rejected with
+          # "mapping process and mapped file have different Team IDs" and the
+          # whole test run fails to start. Hardened runtime only matters for
+          # notarization/distribution, which is Release/archive (untouched);
+          # disabling it for Debug lets the test bundle load. The Keychain
+          # "Always Allow" stickiness depends on the stable signing *identity*
+          # (designated requirement), NOT on this flag, so it is unaffected.
+          ENABLE_HARDENED_RUNTIME: NO
+
+  donemdTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - donemdTests
+    dependencies:
+      - target: donemd
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.tests
+        GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/donemd.app/Contents/MacOS/donemd
+      # Sign the test bundle with the SAME self-signed identity as the app in
+      # Debug. Without this, xcodebuild falls back to an ad-hoc signature for
+      # the .xctest while the host app is signed "Done.md Dev" — dyld then
+      # refuses to load the injected bundle ("mapping process and mapped file
+      # have different Team IDs"), so the whole test run fails to start. Mirror
+      # the app's Debug signing block so both binaries share one identity.
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Done.md Dev"
+          CODE_SIGNING_REQUIRED: YES
+          CODE_SIGNING_ALLOWED: YES
+          DEVELOPMENT_TEAM: ""
+
+schemes:
+  donemd:
+    build:
+      targets:
+        donemd: all
+        donemdTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - donemdTests
+    archive:
+      config: Release

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Schema reference for the Feishu OAuth config plist (v2-2 / issue #41).
+
+  Real credentials NEVER live in this file. Either:
+
+  1. (recommended) Copy this file to:
+       ~/Library/Application Support/Done.md/feishu-config.plist
+     fill in your values, then chmod 600 the file. Done.md picks it up
+     at launch via FeishuAppConfig.
+
+  2. Set env vars on the Xcode scheme (Edit Scheme → Run → Arguments
+     → Environment Variables):
+       DONEMD_FEISHU_APP_ID
+       DONEMD_FEISHU_APP_SECRET
+       DONEMD_FEISHU_REDIRECT_URI
+     Env vars override the plist when present.
+
+  Until v2-10 ships the in-app Settings UI, both paths above are the
+  only way to feed credentials into the OAuth client.
+
+  How to get your own values:
+   - Open https://open.feishu.cn/app
+   - Create a self-built app (only works inside your own Feishu tenant)
+   - Copy "App ID" → client_id, "App Secret" → client_secret
+   - In the app's "安全设置" / "Security Settings", add the redirect URI
+     below verbatim — Feishu rejects mismatched redirect URIs and (since
+     2023) rejects custom URL schemes; only http(s) URLs are accepted,
+     so we use a loopback localhost URL on a pinned port (the same
+     pattern gh / gcloud / rclone use for desktop OAuth)
+   - In "权限管理" / "Permissions", grant the scopes Done.md needs:
+       docx:document, wiki:wiki, offline_access
+     (offline_access is required for the refresh token — without it the
+      user has to re-login every 2 hours; some tenants require admin
+      approval for offline_access, plan ahead)
+     drive scopes are not required for v2-2 OAuth login itself — they
+     get added when the sync-root scanner needs them.
+
+  Self-built app caveat: only members of the tenant where the app was
+  created can log in with these credentials. Cross-tenant Done.md users
+  must either provision their own self-built app or wait for the
+  marketplace ISV path (Phase 4+).
+-->
+<plist version="1.0">
+<dict>
+	<key>client_id</key>
+	<string>cli_REPLACE_WITH_YOUR_APP_ID</string>
+	<key>client_secret</key>
+	<string>REPLACE_WITH_YOUR_APP_SECRET</string>
+	<key>redirect_uri</key>
+	<string>http://localhost:18127/oauth/callback</string>
+</dict>
+</plist>

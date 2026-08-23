@@ -1,0 +1,1986 @@
+/* Phase 5 M4 (#76) — Visual 正文 + 表格阅读排版打磨. Refines the Phase 1
+ * "能用" baseline into a calm, breathable reading surface. Pure styling; no
+ * editing behavior touched (table editing UX stays in #16).
+ *
+ * Reading-surface tokens. Light values here; the dark overrides live in the
+ * `@media (prefers-color-scheme: dark)` block at the very end (base text had
+ * NO dark override before M4 — it was near-black ink on the dark canvas). The
+ * page itself is transparent so the tinted native canvas / frosted 大纲 sidebar
+ * show through; these tokens only color the *content*. */
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+  font-size: 16px;
+  /* 1.7 gives prose room to breathe without feeling loose (reading-app range
+     1.6–1.75 for sans at this size). */
+  line-height: 1.7;
+  color: #1c1c1e;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+
+  /* Content tokens M4 owns (kept distinct from the Phase 3 `--donemd-*`
+     fallback names so those rules are unaffected). */
+  --md-ink: #1c1c1e;         /* body text */
+  --md-heading: #111113;     /* headings sit a touch darker than body */
+  --md-muted: #6b6b70;       /* secondary text: h6, blockquote, captions */
+  --md-rule: #e2e2e6;        /* hairlines: hr, table borders */
+  --md-th-bg: #f6f6f8;       /* table header fill */
+  --md-scroll-thumb: rgba(0, 0, 0, 0.22);        /* vertical scrollbar thumb */
+  --md-scroll-thumb-hover: rgba(0, 0, 0, 0.34);  /* … on hover */
+
+  /* Code chrome + syntax palette (#80 S8). Defined as variables so the writing
+     themes (paper / night) can re-skin code blocks by setting values, without
+     duplicating the ~20 hljs selectors. Light = github. */
+  --md-code-bg: #f0f0f0;     /* inline code background */
+  --md-pre-bg: #f8f8f8;      /* fenced code block background */
+  --md-code-fg: inherit;     /* code text (pre/code) */
+  --hl-red: #d73a49;         /* keyword / type / doctag */
+  --hl-purple: #6f42c1;      /* title / function / class */
+  --hl-blue: #005cc5;        /* attr / number / literal / meta */
+  --hl-string: #032f62;      /* string / regexp */
+  --hl-orange: #e36209;      /* built_in / symbol */
+  --hl-comment: #6a737d;     /* comment / formula */
+  --hl-green: #22863a;       /* name / quote / selector-tag */
+  --hl-base: #24292e;        /* subst / emphasis / strong */
+  --hl-section: #005cc5;     /* section heading */
+  --hl-bullet: #735c0f;      /* bullet */
+  --hl-add-fg: #22863a; --hl-add-bg: #f0fff4;
+  --hl-del-fg: #b31d28; --hl-del-bg: #ffeef0;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* Transparent so the tinted native canvas behind the WKWebView shows
+     through and the frosted chrome / 大纲 sidebar refract it (Phase 5
+     polish). The WKWebView also has drawsBackground=false; both are needed. */
+  background: transparent;
+  color: var(--md-ink);
+}
+
+/* Viewport scrollbar. WKWebView on macOS honors `::-webkit-scrollbar` for the
+   page scroller via the <body> selector (verified: styling `body` visibly
+   changed the bar; styling `html` did NOT).
+
+   Flicker fix: `scrollbar-gutter: stable` did NOT work here — the flicker is the
+   bar appearing/disappearing (and its gutter width jumping) as toggling the 大纲
+   sidebar reflows content past/under the overflow threshold. Forcing
+   `overflow-y: scroll` keeps the bar ALWAYS present, so there is no appear/vanish
+   transition and no width jump. This is the reliable mechanism; stable was not.
+
+   Right-edge margin: removed. The bar previously carried a `2px transparent
+   border` (a deliberate inset) — that WAS the "right margin" the user saw. Now
+   the thumb sits flush to the edge. */
+/* Only `body` is the scroll container here — give ONLY it the always-present
+   scrollbar. Do NOT put overflow-y:scroll on `html` too: html doesn't scroll,
+   so its reserved gutter stays empty and shows as a second, hollow strip of
+   canvas color to the right of the real scrollbar — that was the "wide seam"
+   the user saw (a double gutter, confirmed by it appearing only on the right). */
+body {
+  overflow-y: scroll;
+}
+body::-webkit-scrollbar {
+  width: 8px;
+}
+body::-webkit-scrollbar-track {
+  background: transparent;
+}
+body::-webkit-scrollbar-thumb {
+  background: var(--md-scroll-thumb);
+  border-radius: 4px;
+}
+body::-webkit-scrollbar-thumb:hover {
+  background: var(--md-scroll-thumb-hover);
+}
+
+#editor {
+  /* Roomier top breathing space + a slightly tighter reading measure (~68ch)
+     so long lines don't sprawl. Tables still fill this column at 100%. */
+  padding: 44px 60px 96px;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.ProseMirror {
+  outline: none;
+  min-height: calc(100vh - 64px);
+}
+
+.ProseMirror p { margin: 0 0 0.9em; }
+
+/* Heading scale — a consistent ~1.2 modular ratio, headings hug the content
+   that follows (generous space-before, tight space-after) so structure reads
+   at a glance. Full h1–h6 (Phase 1 only styled h1–h3). */
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror h3,
+.ProseMirror h4,
+.ProseMirror h5,
+.ProseMirror h6 {
+  color: var(--md-heading);
+  line-height: 1.3;
+  font-weight: 700;
+  /* Positioning context for the absolutely-placed fold chevron (see
+     .donemd-fold-toggle) so it can center vertically against the full heading
+     box regardless of font-size / baseline. */
+  position: relative;
+}
+.ProseMirror h1 { font-size: 1.9rem;  margin: 1.4em 0 0.5em; letter-spacing: -0.012em; }
+.ProseMirror h2 { font-size: 1.5rem;  margin: 1.5em 0 0.45em; letter-spacing: -0.008em; }
+.ProseMirror h3 { font-size: 1.24rem; margin: 1.4em 0 0.4em; }
+.ProseMirror h4 { font-size: 1.06rem; margin: 1.35em 0 0.35em; font-weight: 600; }
+.ProseMirror h5 { font-size: 0.94rem; margin: 1.3em 0 0.3em; font-weight: 600; letter-spacing: 0.01em; }
+.ProseMirror h6 {
+  font-size: 0.85rem;
+  margin: 1.3em 0 0.3em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--md-muted);
+}
+/* First heading/paragraph shouldn't push the top of the document down. */
+.ProseMirror > :first-child { margin-top: 0; }
+
+/* 标题折叠 (heading fold, #标题折叠). A chevron injected as an inline widget at
+   the start of each foldable heading. It lives in the left gutter (negative
+   margin pulls it out of the text column) and only shows on heading hover or
+   while that section is collapsed — so an untouched document reads clean, like
+   Feishu/Notion. Clicking asks Swift to toggle (never folds locally). */
+.ProseMirror .donemd-fold-toggle {
+  /* Absolutely positioned against the heading box (heading has position:
+     relative). top/bottom:0 makes the button as tall as the whole heading line,
+     and flex centering then puts the glyph at the exact vertical center — this
+     is independent of font-size, line-height, and baseline, which is why the
+     earlier vertical-align approaches rode low on big headings. */
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Sit in the left gutter just left of the heading text, so heading text
+     never reflows when the chevron fades in/out. Kept close to the heading
+     (the drag handle sits further left, at the chevron's left — see
+     block-drag-handle.ts OFFSET_HEADING). */
+  left: -1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--md-muted);
+  /* Fixed rem — the triangle is the SAME size on h1…h6 (an em size scaled with
+     the heading and vanished under h4). */
+  font-size: 1.5rem;
+  line-height: 1;
+  /* Hidden by default; hovering the heading (or a collapsed section) reveals it.
+     transform gives the ▸→▾ rotation on collapse toggle. */
+  opacity: 0;
+  transform: rotate(90deg);          /* ▾ expanded (points down) */
+  transform-origin: center;
+  transition: opacity 0.12s ease, transform 0.12s ease, color 0.12s ease;
+  user-select: none;
+}
+.ProseMirror .donemd-fold-toggle.is-collapsed {
+  transform: rotate(0deg);           /* ▸ collapsed (points right) */
+  /* Stay fully visible while folded — this chevron is the ONLY affordance
+     telling the user content is hidden here and the only way to re-expand it,
+     so it must read clearly, not fade like the hover hint. Accent color +
+     bolder weight makes the collapsed marker obvious against the prose. */
+  opacity: 1;
+  color: #0a84ff;                    /* system accent, matches links/caret */
+  font-weight: 700;
+}
+/* Reveal on hover of the heading. The widget sits inside the heading element,
+   so :hover on the heading covers it. */
+.ProseMirror h1:hover .donemd-fold-toggle,
+.ProseMirror h2:hover .donemd-fold-toggle,
+.ProseMirror h3:hover .donemd-fold-toggle,
+.ProseMirror h4:hover .donemd-fold-toggle,
+.ProseMirror h5:hover .donemd-fold-toggle,
+.ProseMirror h6:hover .donemd-fold-toggle,
+.ProseMirror .donemd-fold-toggle:hover {
+  opacity: 0.9;
+}
+
+/* A block hidden because its heading is collapsed. Kept in the document (so
+   serialization / getJSON are untouched) but removed from layout. */
+.ProseMirror .is-folded-hidden {
+  display: none;
+}
+
+.ProseMirror ul, .ProseMirror ol { padding-left: 1.5em; margin: 0 0 0.9em; }
+.ProseMirror li { margin: 0.15em 0; }
+.ProseMirror li > p { margin: 0.2em 0; }
+/* Nested lists tuck in without extra outer gap. */
+.ProseMirror li > ul, .ProseMirror li > ol { margin: 0.15em 0 0.2em; }
+
+/* 任务列表 (task list, #标题折叠 sibling). Tiptap renders
+   `ul[data-type=taskList] > li[data-type=taskItem] > label > input[type=checkbox]`
+   with the browser's native (tiny, ~13px) checkbox. The box read undersized
+   against 16px body text, so we drop the list marker and lay each item out as
+   [checkbox | content], with the checkbox scaled ~2× to a 20px box that lines
+   up with the first text line. Accent-tinted so a checked box picks up the
+   active writing theme's color. */
+.ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+.ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55em;
+}
+.ProseMirror ul[data-type="taskList"] li > label {
+  /* Don't let the checkbox column stretch or shrink; keep it top-aligned to
+     the first line of a multi-line item. */
+  flex: 0 0 auto;
+  margin-top: 0.15em;
+  user-select: none;
+}
+.ProseMirror ul[data-type="taskList"] li > div {
+  /* The content column takes the remaining width so long items wrap normally
+     instead of pushing the checkbox around. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ProseMirror ul[data-type="taskList"] li > div > p { margin: 0; }
+.ProseMirror ul[data-type="taskList"] input[type="checkbox"] {
+  /* ~2× the native box (user request: 改大一倍). accent-color tints the
+     checked fill to the same system blue as links/caret (#0a84ff) — the
+     established in-content accent; the per-theme accent lives in the Swift
+     chrome, not the WKWebView content. */
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #0a84ff;
+}
+
+.ProseMirror code {
+  background: var(--md-code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.ProseMirror pre {
+  background: var(--md-pre-bg);
+  color: var(--md-code-fg);
+  padding: 12px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+}
+.ProseMirror pre code { background: none; padding: 0; }
+
+.ProseMirror blockquote {
+  border-left: 3px solid var(--md-rule);
+  padding: 0.1em 0 0.1em 1em;
+  color: var(--md-muted);
+  margin: 0 0 0.9em;
+}
+.ProseMirror blockquote > :first-child { margin-top: 0; }
+.ProseMirror blockquote > :last-child { margin-bottom: 0; }
+
+.ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--md-rule);
+  margin: 1.8em 0;
+}
+
+.ProseMirror a { color: #0a84ff; text-decoration: underline; }
+.ProseMirror strong { font-weight: 700; }
+.ProseMirror em { font-style: italic; }
+
+/* Selection bubble menu (Slice 10) — 10 actions in two groups, separator
+ * in the middle. Tippy.js (via @tiptap/extension-bubble-menu) positions
+ * the whole element relative to the user's selection. */
+.donemd-bubble {
+  display: flex;
+  flex-wrap: wrap;          /* wrap to a 2nd row in a narrow pane so the AI
+                               group is never pushed off the right edge */
+  justify-content: center;
+  align-items: center;
+  gap: 1px;
+  /* Cap the width so the full button set wraps into ~2 tidy rows rather than
+     overflowing past a narrow editor pane. Stays one row when there's room.
+     Tuned to sit clearly inside the default editor pane (HIG: compact
+     controls, no oversized chrome). */
+  max-width: 264px;
+  background: rgba(28, 28, 30, 0.96);
+  color: #f5f5f7;
+  border-radius: 8px;
+  padding: 4px 5px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+  font-size: 12px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.donemd-bubble__btn {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  /* Compact targets — HIG Mac controls are 22-28pt, precise pointer input. */
+  padding: 3px 6px;
+  min-width: 24px;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: background-color 0.12s ease;
+}
+
+.donemd-bubble__btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.donemd-bubble__btn:active {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.donemd-bubble__btn.is-active {
+  background: rgba(10, 132, 255, 0.5);
+  color: #ffffff;
+}
+
+.donemd-bubble__divider {
+  display: inline-block;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Tippy.js base styles since we don't ship the default tippy theme. */
+[data-tippy-root] {
+  pointer-events: auto;
+}
+
+/* Raw markdown block (Slice 6) — content the Visual view can't render
+ * natively (HTML, callouts, …) shows up as a discreet grey atom node
+ * with a hint that the right-pane Markdown 源 is the place to edit it. */
+.donemd-raw-block {
+  position: relative;
+  background: #f4f4f6;
+  border: 1px solid #e1e1e4;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0.8em 0;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.donemd-raw-block__content {
+  margin: 0;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  line-height: 1.5;
+  color: #4b4b50;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.donemd-raw-block__hint {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 11px;
+  color: #98989d;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.ProseMirror .donemd-raw-block.ProseMirror-selectednode {
+  outline: 2px solid #0a84ff;
+  outline-offset: 2px;
+}
+
+/* Feishu placeholder block (Phase 2 v2 / ADR-0007) — local projection of a
+ * Feishu-native block (sheet / mindnote / board / bitable / attachment /
+ * video / 3rd-party embed) that has no Markdown equivalent. Atom node:
+ * users move / delete the card whole, content lives only in Feishu. */
+.donemd-feishu-placeholder {
+  position: relative;
+  background: #f5f7fa;
+  border: 1px solid #dde2e9;
+  border-radius: 6px;
+  padding: 12px 14px 14px;
+  margin: 0.8em 0;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.donemd-feishu-placeholder__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.donemd-feishu-placeholder__icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.donemd-feishu-placeholder__type {
+  font-size: 12px;
+  color: #6e7682;
+  letter-spacing: 0.02em;
+}
+
+.donemd-feishu-placeholder__open {
+  margin-left: auto;
+  font-size: 12px;
+  color: #0a84ff;
+  text-decoration: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: auto;
+}
+
+.donemd-feishu-placeholder__open:hover {
+  background: rgba(10, 132, 255, 0.08);
+}
+
+.donemd-feishu-placeholder__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1d1d1f;
+  line-height: 1.4;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.donemd-feishu-placeholder__summary {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6e7682;
+  line-height: 1.45;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ProseMirror .donemd-feishu-placeholder.ProseMirror-selectednode {
+  outline: 2px solid #0a84ff;
+  outline-offset: 2px;
+}
+
+/* Images — fit to editor width, preserve aspect ratio, cap very tall ones.
+ * Matches the Notion / Feishu convention of letting the document layout
+ * dictate width regardless of source resolution.
+ *
+ * DonemdImage's NodeView wraps the <img> in `.donemd-image-frame` so the
+ * whole picture reads as one selectable object: a single click selects the
+ * node (blue outline below), and a magnifier badge fades in on hover to open
+ * the native QuickLook preview (#77) — preview is opt-in, split from
+ * selection so clicking no longer hijacks the caret. */
+.ProseMirror .donemd-image-frame {
+  position: relative;
+  /* Fill the reading column so an image lines up with paragraphs / tables /
+     other blocks instead of shrinking to its own pixel width (which made
+     smaller screenshots read as "too narrow"). */
+  width: 100%;
+  margin: 0.5em 0;
+  border-radius: 4px;
+  cursor: default;
+}
+.ProseMirror .donemd-image-frame img {
+  display: block;
+  /* Width-only responsive: the picture always spans the column and its
+     height follows the natural aspect ratio. No `max-height` — the height
+     must NOT be pegged to the viewport, otherwise shrinking the window
+     squashes the image. A very tall image simply extends past the fold and
+     is clipped by the window's bottom edge, which is the intended behavior. */
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+/* Selection outline — matches the raw / feishu-placeholder blocks so every
+ * atom node picks the same visual language (single click → blue frame). */
+.ProseMirror .donemd-image-frame.ProseMirror-selectednode {
+  outline: 2px solid #0a84ff;
+  outline-offset: 2px;
+}
+
+/* Magnifier badge — hidden until hover (or while the node is selected), then
+ * fades into the top-right corner. Clicking it opens QuickLook. */
+.ProseMirror .donemd-image-zoom {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  cursor: zoom-in;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.ProseMirror .donemd-image-frame:hover .donemd-image-zoom,
+.ProseMirror .donemd-image-frame.ProseMirror-selectednode .donemd-image-zoom {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ProseMirror .donemd-image-zoom:hover {
+  background: rgba(0, 0, 0, 0.68);
+}
+
+/* Local video (#88) — mirrors the image frame so a video reads as the same
+ * kind of block object: it fills the reading column (never its raw pixel
+ * resolution, which could overflow the page) and picks up the same blue
+ * selection outline. Selection is via the left drag handle (a single click
+ * on the <video> body is owned by the native controls for play / seek, so it
+ * can't double as "select the node" the way a click on an image can). */
+.ProseMirror .donemd-video-frame {
+  position: relative;
+  /* Fill the reading column so a video lines up with paragraphs / images /
+     other blocks instead of blowing up to its source resolution (which made
+     large clips overflow past the document width). */
+  width: 100%;
+  margin: 0.5em 0;
+  border-radius: 4px;
+  cursor: default;
+}
+.ProseMirror .donemd-video-frame video {
+  display: block;
+  /* Width-only responsive, same rule as images: the player always spans the
+     column and its height follows the natural aspect ratio. No `max-height`
+     pegged to the viewport (that would squash on window resize). */
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+  background: #000;
+}
+/* Selection outline — identical to the image / raw / placeholder blocks so
+ * every atom node speaks the same visual language (handle click → blue frame,
+ * then Delete removes it). */
+.ProseMirror .donemd-video-frame.ProseMirror-selectednode {
+  outline: 2px solid #0a84ff;
+  outline-offset: 2px;
+}
+
+/* 块拖拽手柄 (Block drag handle) — Feishu-style six-dot grip that fades into
+ * the left gutter when the pointer is over a top-level block; press-and-drag
+ * to reorder blocks (see block-drag-handle.ts). Lives on document.body with
+ * fixed positioning (JS places it from the block's viewport rect), so it can
+ * sit outside the 760px reading column without being clipped. */
+.donemd-drag-handle {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 26px;
+  padding: 0;
+  border-radius: 5px;
+  color: #98989d;
+  background: transparent;
+  cursor: grab;
+  opacity: 0.55;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.donemd-drag-handle:hover {
+  opacity: 1;
+  color: #6e6e73;
+  background: rgba(120, 120, 128, 0.14);
+}
+.donemd-drag-handle:active,
+.donemd-drag-handle.is-dragging {
+  cursor: grabbing;
+  opacity: 1;
+}
+:root[data-theme="night"] .donemd-drag-handle { color: #7d8590; }
+:root[data-theme="night"] .donemd-drag-handle:hover {
+  color: #c9d1d9;
+  background: rgba(255, 255, 255, 0.10);
+}
+
+/* Gap cursor (空隙光标) — the horizontal caret ProseMirror shows when the
+ * insertion point lands in a spot no normal text cursor fits, i.e. directly
+ * above / below an atom block (block math, a standalone image, a placeholder
+ * card). It's standard behavior, but the default hairline reads as a glitch;
+ * make it a clear, blinking blue insertion bar so it obviously means "typing
+ * starts here". */
+.ProseMirror-gapcursor::after {
+  border-top: 2px solid #0a84ff;
+  width: 40%;
+  max-width: 320px;
+  margin-left: 0;
+}
+
+/* GitHub callout (Phase 2 / Slice 2 #32) — colored card with icon button.
+ * 5 types map to Feishu light-* palette (PRD § 飞书 callout 类型映射表).
+ * Icon button on the left is itself the type switcher (click → picker).
+ * Right-click anywhere on the card opens the same picker. */
+.donemd-callout {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  padding: 12px 16px;
+  margin: 0.8em 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+/* Whole-block selection frame — same blue outline every other block object
+ * uses (image / raw / placeholder / math block), so selecting a callout via
+ * the drag handle or a marquee reads the same way before Delete. */
+.ProseMirror .donemd-callout.ProseMirror-selectednode {
+  outline: 1.2px solid #0a84ff;
+  outline-offset: 2px;
+}
+
+/* Suppress the browser's native selection highlight while a whole node is
+ * NodeSelection-ed. ProseMirror adds `.ProseMirror-hideselection` to the
+ * editor root when the current selection is a NodeSelection (which has
+ * `visible === false`) and relies on these rules — normally shipped in
+ * prosemirror-view/style/prosemirror.css, which we don't import — to hide it.
+ * Without them, a NodeSelection on a content-bearing block (callout / code
+ * block) spans a DOM range ending at the next block's start, so WebKit paints
+ * a blue band across the inter-block margin gap below the selected block. Our
+ * own `.ProseMirror-selectednode` outline is the only selection affordance we
+ * want here. */
+.ProseMirror-hideselection *::selection { background: transparent; }
+.ProseMirror-hideselection *::-moz-selection { background: transparent; }
+/* The `*` above only reaches descendants. When a NodeSelection brackets a
+ * content-bearing block, WebKit fills the inter-block margin gap using the
+ * editor *container's* own selection paint, so we must also blank the root
+ * element's ::selection — otherwise a blue band lingers in the gap below the
+ * selected callout / code block. */
+.ProseMirror-hideselection::selection { background: transparent; }
+.ProseMirror-hideselection::-moz-selection { background: transparent; }
+.ProseMirror-hideselection { caret-color: transparent; }
+
+.donemd-callout__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 2px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: inherit;
+  transition: background-color 0.12s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.donemd-callout__icon:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.donemd-callout__icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.donemd-callout__content {
+  min-width: 0;
+}
+
+.donemd-callout__content > :first-child { margin-top: 0; }
+.donemd-callout__content > :last-child { margin-bottom: 0; }
+
+.donemd-callout--note {
+  background: #e7f1fd;
+  border-color: #cfe2fb;
+  color: #0a3d77;
+}
+.donemd-callout--note .donemd-callout__icon { color: #1f6feb; }
+
+.donemd-callout--tip {
+  background: #e6f4ec;
+  border-color: #c8e6d3;
+  color: #0d4d27;
+}
+.donemd-callout--tip .donemd-callout__icon { color: #1a7f37; }
+
+.donemd-callout--important {
+  background: #f5edff;
+  border-color: #e0cffb;
+  color: #4a1f9a;
+}
+.donemd-callout--important .donemd-callout__icon { color: #8250df; }
+
+.donemd-callout--warning {
+  background: #fff8e6;
+  border-color: #fae6b3;
+  color: #6b4500;
+}
+.donemd-callout--warning .donemd-callout__icon { color: #9a6700; }
+
+.donemd-callout--caution {
+  background: #fde8e8;
+  border-color: #f9cbcb;
+  color: #82161f;
+}
+.donemd-callout--caution .donemd-callout__icon { color: #cf222e; }
+
+/* System dark (#80 S8) — the base callout colors above are light-only; without
+   this, the 5 cards stayed pale on the dark canvas. Deep tinted fills + a
+   matching hue border + light readable text/icon. Guarded by :not([data-theme])
+   so it applies only to 跟随系统 in dark mode (paper/night set their own). */
+@media (prefers-color-scheme: dark) {
+  /* Each type collapses to ONE hue family: fill = that hue very dark, border =
+     mid, text + icon = the SAME bright value the source pane / code blocks use
+     (github-dark: blue #79c0ff / green #7ee787 / purple #d2a8ff / orange
+     #ffa657 / red #ff7b72). So text and icon never diverge, and greens are all
+     one green, blues all one blue, etc. */
+  :root:not([data-theme]) .donemd-callout--note {
+    background: #0d2137; border-color: #1f3b5c; color: #79c0ff;
+  }
+  :root:not([data-theme]) .donemd-callout--note .donemd-callout__icon { color: #79c0ff; }
+
+  :root:not([data-theme]) .donemd-callout--tip {
+    background: #0e2818; border-color: #21482f; color: #7ee787;
+  }
+  :root:not([data-theme]) .donemd-callout--tip .donemd-callout__icon { color: #7ee787; }
+
+  :root:not([data-theme]) .donemd-callout--important {
+    background: #1f1633; border-color: #3d2f66; color: #d2a8ff;
+  }
+  :root:not([data-theme]) .donemd-callout--important .donemd-callout__icon { color: #d2a8ff; }
+
+  :root:not([data-theme]) .donemd-callout--warning {
+    background: #2e1d0b; border-color: #573914; color: #ffa657;
+  }
+  :root:not([data-theme]) .donemd-callout--warning .donemd-callout__icon { color: #ffa657; }
+
+  :root:not([data-theme]) .donemd-callout--caution {
+    background: #2d1210; border-color: #5c2420; color: #ff7b72;
+  }
+  :root:not([data-theme]) .donemd-callout--caution .donemd-callout__icon { color: #ff7b72; }
+
+  /* Icon hover needs a light wash on dark (base uses a black wash). */
+  :root:not([data-theme]) .donemd-callout__icon:hover { background: rgba(255, 255, 255, 0.10); }
+}
+
+/* Floating type picker — appears on icon-click or right-click. Append to
+ * <body> and position-fixed off the anchor's bounding rect so it survives
+ * scroll containers without clipping. */
+.donemd-callout-picker {
+  position: fixed;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: #ffffff;
+  border: 1px solid #d1d1d6;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.donemd-callout-picker__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.donemd-callout-picker__item svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.donemd-callout-picker__item:hover { background: rgba(0, 0, 0, 0.06); }
+.donemd-callout-picker__item.is-current { background: rgba(10, 132, 255, 0.15); }
+
+.donemd-callout-picker__item--note    { color: #1f6feb; }
+.donemd-callout-picker__item--tip     { color: #1a7f37; }
+.donemd-callout-picker__item--important { color: #8250df; }
+.donemd-callout-picker__item--warning { color: #9a6700; }
+.donemd-callout-picker__item--caution { color: #cf222e; }
+
+/* Tables (Phase 5 M4 #76) — refined from the Phase 1 grid: hairline borders,
+ * a soft rounded frame, a distinct header band, zebra rows and comfortable
+ * cell padding, so tabular data reads cleanly. Editing UX (cell selection,
+ * column resize) is untouched — that's #16.
+ *
+ * IMPORTANT: the table itself MUST keep `border-collapse: collapse` — that's
+ * what prosemirror-tables' column-resize plugin assumes (its own stylesheet
+ * sets it). Using `separate` breaks resize-handle placement / min-width and
+ * makes rows jitter + shrink when the pointer nears a column border. So the
+ * rounded outer frame lives on the plugin's `.tableWrapper` div, NOT the
+ * table, and cell hairlines use plain collapsed borders. */
+.ProseMirror .tableWrapper {
+  margin: 1.1em 0;
+  border: 1px solid var(--md-rule);
+  border-radius: 8px;
+  /* Keep the plugin's `overflow-x: auto` (wide tables scroll). We don't force
+     `overflow: hidden` for corner-clipping — that would kill the scroll. With
+     `table-layout: fixed; width: 100%` tables rarely overflow, so the rounded
+     frame reads clean in the common case. */
+}
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  font-size: 0.95em;
+}
+.ProseMirror table td,
+.ProseMirror table th {
+  border: 1px solid var(--md-rule);
+  padding: 8px 12px;
+  vertical-align: top;
+  position: relative;
+  min-width: 80px;
+  line-height: 1.5;
+}
+/* Drop the outermost cell borders; the .tableWrapper frame supplies those
+   edges (avoids a double line just inside the rounded frame). */
+.ProseMirror table tr:first-child td,
+.ProseMirror table tr:first-child th { border-top: none; }
+.ProseMirror table tr:last-child td { border-bottom: none; }
+.ProseMirror table td:first-child,
+.ProseMirror table th:first-child { border-left: none; }
+.ProseMirror table td:last-child,
+.ProseMirror table th:last-child { border-right: none; }
+.ProseMirror table th {
+  background: var(--md-th-bg);
+  font-weight: 600;
+  text-align: left;
+  color: var(--md-heading);
+}
+/* No zebra striping: it was `tr:nth-child(even)`, which colors rows by their
+   POSITION. In an editable table, inserting/deleting a row reshuffles every
+   row's parity, so fills flip white↔grey on each edit (looked "random"). Row
+   hairlines already delineate rows; the header band alone carries the fill.
+   (Notion / Bear editable tables likewise don't stripe.) */
+/* Compact cells: zero the outer paragraph margins. Target by TYPE
+   (`p:last-of-type`), NOT position (`:last-child`) — on hover the resize
+   plugin injects a `<div class="column-resize-handle">` as the cell's last
+   child, which would steal `:last-child` from the paragraph and hand its
+   0.9em bottom margin back, growing the row (then reverting on mouse-leave).
+   `:last-of-type` ignores the div, so the paragraph stays compact. */
+.ProseMirror table td > p:first-of-type,
+.ProseMirror table th > p:first-of-type { margin-top: 0; }
+.ProseMirror table td > p:last-of-type,
+.ProseMirror table th > p:last-of-type { margin-bottom: 0; }
+
+/* Table toolbar (#16 / #76) — caret-in-table floating controls. Dark glass,
+ * matching the selection bubble menu's visual language; position:fixed set
+ * inline by the component. */
+.donemd-table-toolbar {
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px 4px;
+  background: rgba(28, 28, 30, 0.96);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.donemd-table-toolbar__btn {
+  background: transparent;
+  border: none;
+  color: #f5f5f7;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease;
+}
+.donemd-table-toolbar__btn:hover { background: rgba(255, 255, 255, 0.14); }
+.donemd-table-toolbar__btn:active { background: rgba(255, 255, 255, 0.22); }
+.donemd-table-toolbar__btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.donemd-table-toolbar__btn:disabled:hover { background: transparent; }
+
+/* --- Table editing affordances (owned by #16, not restyled here) --------- */
+.ProseMirror table .selectedCell {
+  background: #cfe6ff;
+}
+.ProseMirror table .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background-color: #0a84ff;
+  pointer-events: none;
+}
+
+/* MermaidCodeBlock — Tiptap codeBlock node with a NodeView that swaps
+ * between source and rendered SVG when language === "mermaid". For all
+ * other languages the wrapper is transparent and only the inner <pre>
+ * shows, matching the global `.ProseMirror pre` styling. */
+.donemd-codeblock {
+  margin: 0.8em 0;
+  /* Anchor for the absolutely-positioned copy button. */
+  position: relative;
+}
+
+/* Whole-block selection frame — same blue outline the other block objects use.
+ * Applies to both the source <pre> form and the rendered mermaid form (both
+ * share the .donemd-codeblock wrapper), so a drag-handle click reads clearly
+ * before Delete removes the whole block. */
+.ProseMirror .donemd-codeblock.ProseMirror-selectednode {
+  outline: 1.2px solid #0a84ff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.donemd-codeblock__source {
+  /* The inner <pre> reuses `.ProseMirror pre` styles for background /
+   * padding; nothing extra needed here. Keeping the rule so future
+   * source-mode tweaks have an obvious anchor. */
+}
+
+/* --- Copy button (Phase 5 M1) ------------------------------------------
+ * Sibling of the source <pre>, pinned top-right of the block. Low-profile:
+ * faded until the block is hovered, then visible; brief "已复制" state after
+ * a successful copy. Light values here; dark overrides in the dark media
+ * query below (follows system theme like the rest of the editor). */
+.donemd-codeblock__copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 2;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #57606a;
+  background: rgba(255, 255, 255, 0.85);
+  border: 0.5px solid rgba(0, 0, 0, 0.14);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+  -webkit-font-smoothing: antialiased;
+}
+.donemd-codeblock:hover .donemd-codeblock__copy,
+.donemd-codeblock__copy:focus-visible {
+  opacity: 1;
+}
+.donemd-codeblock__copy:hover {
+  background: #ffffff;
+  color: #1f2328;
+}
+.donemd-codeblock__copy.is-copied {
+  opacity: 1;
+  color: #1a7f37;
+  border-color: rgba(26, 127, 55, 0.4);
+}
+
+/* --- Syntax highlighting tokens (lowlight / highlight.js) ---------------
+ * Token colors adapted from highlight.js `github` (light) theme. The code
+ * block chrome owns the background (see `.ProseMirror pre`), so we only set
+ * token foreground colors here — not `.hljs` background. */
+.hljs-doctag, .hljs-keyword, .hljs-meta .hljs-keyword,
+.hljs-template-tag, .hljs-template-variable, .hljs-type,
+.hljs-variable.language_ { color: var(--hl-red); }
+.hljs-title, .hljs-title.class_, .hljs-title.class_.inherited__,
+.hljs-title.function_ { color: var(--hl-purple); }
+.hljs-attr, .hljs-attribute, .hljs-literal, .hljs-meta, .hljs-number,
+.hljs-operator, .hljs-variable, .hljs-selector-attr, .hljs-selector-class,
+.hljs-selector-id { color: var(--hl-blue); }
+.hljs-regexp, .hljs-string, .hljs-meta .hljs-string { color: var(--hl-string); }
+.hljs-built_in, .hljs-symbol { color: var(--hl-orange); }
+.hljs-comment, .hljs-code, .hljs-formula { color: var(--hl-comment); }
+.hljs-name, .hljs-quote, .hljs-selector-tag,
+.hljs-selector-pseudo { color: var(--hl-green); }
+.hljs-subst { color: var(--hl-base); }
+.hljs-section { color: var(--hl-section); font-weight: bold; }
+.hljs-bullet { color: var(--hl-bullet); }
+.hljs-emphasis { color: var(--hl-base); font-style: italic; }
+.hljs-strong { color: var(--hl-base); font-weight: bold; }
+.hljs-addition { color: var(--hl-add-fg); background-color: var(--hl-add-bg); }
+.hljs-deletion { color: var(--hl-del-fg); background-color: var(--hl-del-bg); }
+
+.donemd-mermaid__render {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #e1e1e4;
+  border-radius: 6px;
+  padding: 18px 20px;
+  text-align: center;
+  cursor: zoom-in;
+  /* Diagrams are user-defined; cap the rendered SVG width so wide
+   * flowcharts don't overflow the editor column. */
+  overflow: hidden;
+}
+
+.donemd-mermaid__render.is-grabbing {
+  cursor: grabbing;
+}
+
+/* panTarget receives the pan/zoom transform. Wrapping the SVG keeps the
+ * transform stable across re-renders (we only swap innerHTML inside
+ * panTarget, not the panTarget node itself). */
+.donemd-mermaid__pan-target {
+  display: block;
+  transform-origin: 0 0;
+  width: 100%;
+  will-change: transform;
+}
+
+.donemd-mermaid__render svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.donemd-mermaid__render.is-error {
+  background: #fff5f5;
+  border-color: #ff3b30;
+  text-align: left;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.donemd-mermaid__error-box {
+  position: relative;
+  padding-right: 76px;
+}
+
+.donemd-mermaid__error-line {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  color: #c0392b;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.donemd-mermaid__hint {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 11px;
+  color: #98989d;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.donemd-mermaid__empty {
+  color: #98989d;
+  font-style: italic;
+}
+
+/* --- Math (KaTeX) — Phase 5 M2 -----------------------------------------
+ * Inline `$...$` sits on the text baseline; block `$$...$$` is a centered
+ * standalone formula. Rendered glyph color inherits currentColor so dark
+ * mode works with no extra rules. Failure UI mirrors the mermaid red-border
+ * pattern with the raw LaTeX kept visible. */
+.donemd-math-inline {
+  display: inline;
+  border-radius: 3px;
+}
+/* Selection feedback for the atom math nodes — same blue language as images /
+ * raw blocks. Inline math tints its background (an outline on an inline box
+ * clips oddly at line wraps); block math gets the full outline frame. */
+.ProseMirror .donemd-math-inline.ProseMirror-selectednode {
+  background: rgba(10, 132, 255, 0.18);
+  box-shadow: 0 0 0 1px rgba(10, 132, 255, 0.5);
+}
+.ProseMirror .donemd-math-block.ProseMirror-selectednode {
+  outline: 1.2px solid #0a84ff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.donemd-math-inline.is-error {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  color: #c0392b;
+  background: #fff5f5;
+  border-bottom: 1px dashed #ff3b30;
+  padding: 0 2px;
+}
+
+.donemd-math-block {
+  margin: 0.9em 0;
+  text-align: center;
+  overflow-x: auto;
+}
+.donemd-math-block.is-error {
+  text-align: left;
+  background: #fff5f5;
+  border: 1px solid #ff3b30;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.donemd-math-block__error-line {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  color: #c0392b;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.donemd-math-block__raw {
+  margin: 6px 0 0;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  color: #6a737d;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+@media (prefers-color-scheme: dark) {
+  .donemd-math-inline.is-error,
+  .donemd-math-block.is-error {
+    background: rgba(255, 59, 48, 0.12);
+  }
+  .donemd-math-block__raw { color: #8b949e; }
+}
+
+/* Mermaid 编辑抽屉 (Slice 4b) — full-screen modal with CodeMirror left
+ * + live preview right. Overlay covers the whole viewport; modal box is
+ * centered with 80vw / 80vh and rounded corners. */
+.donemd-mermaid-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* No dim / no backdrop blur — the frosted panel carries its own vibrancy, so
+     the overlay is just a transparent click-catch layer for close-on-outside. */
+  background: transparent;
+}
+
+/* Frosted translucent panel — macOS "vibrancy" window feel: a near-material
+   background with a Gaussian blur of what's behind, hairline border, soft
+   shadow. Not a flat white box. */
+.donemd-mermaid-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, 92vw);
+  height: min(800px, 88vh);
+  background: rgba(246, 246, 248, 0.78);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.30);
+  overflow: hidden;
+}
+
+.donemd-mermaid-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 14px;
+  /* Hairline divider only; header shares the frosted panel background so the
+     titlebar reads as part of one vibrant surface (no separate grey strip). */
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.10);
+  background: transparent;
+  flex: 0 0 auto;
+}
+
+.donemd-mermaid-drawer__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1c1c1e;
+}
+
+.donemd-mermaid-drawer__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.donemd-mermaid-drawer__btn {
+  font: inherit;
+  font-size: 13px;
+  border: 0.5px solid rgba(0, 0, 0, 0.14);
+  background: rgba(255, 255, 255, 0.55);
+  color: #1c1c1e;
+  padding: 5px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.donemd-mermaid-drawer__btn:hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.donemd-mermaid-drawer__btn--primary {
+  background: #0a84ff;
+  border-color: #0a84ff;
+  color: #ffffff;
+}
+
+.donemd-mermaid-drawer__btn--primary:hover {
+  background: #0070e0;
+  border-color: #0070e0;
+}
+
+.donemd-mermaid-drawer__btn--icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  border-radius: 6px;
+  color: #6b6b6b;
+}
+
+.donemd-mermaid-drawer__body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.donemd-mermaid-drawer__code {
+  border-right: 0.5px solid rgba(0, 0, 0, 0.10);
+  overflow: auto;
+  /* Transparent so the frosted panel shows through both panes. */
+  background: transparent;
+  min-height: 0;
+}
+
+.donemd-mermaid-drawer__code .cm-editor {
+  height: 100%;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  background: transparent;
+}
+
+.donemd-mermaid-drawer__code .cm-scroller {
+  font-family: inherit;
+  background: transparent;
+}
+
+/* No line-number / fold gutter — this is a small diagram-source editor, not a
+   code IDE. basicSetup ships the gutter; hide it (same approach as the
+   Markdown 源 pane) so the left edge is clean. */
+.donemd-mermaid-drawer__code .cm-gutters { display: none !important; }
+.donemd-mermaid-drawer__code .cm-content { padding-left: 14px; }
+/* Read-clean: no active-line highlight band across the editor. */
+.donemd-mermaid-drawer__code .cm-activeLine { background: transparent !important; }
+.donemd-mermaid-drawer__code .cm-editor.cm-focused { outline: none; }
+
+.donemd-mermaid-drawer__preview {
+  position: relative;
+  background: transparent;
+  overflow: hidden;
+  cursor: grab;
+  min-height: 0;
+}
+
+.donemd-mermaid-drawer__preview.is-grabbing {
+  cursor: grabbing;
+}
+
+.donemd-mermaid-drawer__preview.is-error {
+  background: #fff5f5;
+  cursor: default;
+}
+
+.donemd-mermaid-drawer__preview-target {
+  display: block;
+  transform-origin: 0 0;
+  padding: 24px;
+  width: 100%;
+  will-change: transform;
+}
+
+.donemd-mermaid-drawer__preview-target svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.donemd-mermaid-drawer__preview.is-error .donemd-mermaid-drawer__preview-target {
+  text-align: left;
+}
+
+/* Dark vibrancy variant of the frosted drawer — used in system dark mode and
+   the 赛博夜色 theme, so the panel reads as a dark translucent sheet rather
+   than a bright white box on a dark canvas. */
+@media (prefers-color-scheme: dark) {
+  .donemd-mermaid-drawer {
+    background: rgba(38, 40, 44, 0.72);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+  .donemd-mermaid-drawer__title { color: #f0f0f2; }
+  .donemd-mermaid-drawer__header { border-bottom-color: rgba(255, 255, 255, 0.10); }
+  .donemd-mermaid-drawer__code { border-right-color: rgba(255, 255, 255, 0.10); }
+  .donemd-mermaid-drawer__btn {
+    border-color: rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.10);
+    color: #e6e6e8;
+  }
+  .donemd-mermaid-drawer__btn:hover { background: rgba(255, 255, 255, 0.18); }
+  .donemd-mermaid-drawer__btn--icon { color: #b0b0b4; }
+}
+:root[data-theme="night"] .donemd-mermaid-drawer {
+  background: rgba(26, 32, 41, 0.74);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="night"] .donemd-mermaid-drawer__title { color: #e2e8f0; }
+:root[data-theme="night"] .donemd-mermaid-drawer__header { border-bottom-color: rgba(255, 255, 255, 0.10); }
+:root[data-theme="night"] .donemd-mermaid-drawer__code { border-right-color: rgba(255, 255, 255, 0.10); }
+:root[data-theme="night"] .donemd-mermaid-drawer__btn {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.10);
+  color: #d5dce6;
+}
+:root[data-theme="night"] .donemd-mermaid-drawer__btn:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* --- Phase 3 #63: AI streaming (临时态) + bubble AI dropdown + toast ------ */
+
+/* Original selection while streaming: greyed + struck through underneath. */
+.donemd-ai-stream__original {
+  color: var(--donemd-muted, #9aa0a6);
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* The accumulating raw-markdown tokens, monospace to match the source pane. */
+.donemd-ai-stream__text {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.95em;
+  white-space: pre-wrap;
+  color: var(--donemd-text, #1f2328);
+  background: rgba(10, 132, 255, 0.06);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.donemd-ai-stream__caret {
+  color: #0a84ff;
+  animation: donemd-ai-blink 1s step-start infinite;
+}
+@keyframes donemd-ai-blink { 50% { opacity: 0; } }
+
+/* #71: [[内联 Diff 视图]] — auto-opens after a 直接替换 transform. The real
+ * (new) text in [from,to] is hidden; this overlay shows red strikethrough
+ * deletes + green inserts, with 还原/保留 actions (保留 auto-keeps on a
+ * countdown). The tinted background sits on the diff *text* only, so the
+ * action buttons stay on a clean surface (not caught in the tint). */
+.donemd-inline-diff__source {
+  /* Hide the committed result while the diff overlay stands in for it. */
+  display: none;
+}
+.donemd-inline-diff {
+  display: inline;
+  user-select: none;
+}
+.donemd-inline-diff__body {
+  border-radius: 4px;
+  padding: 1px 2px;
+  background: rgba(10, 132, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.18);
+}
+.donemd-inline-diff__del {
+  color: #c4314b;
+  text-decoration: line-through;
+  background: rgba(196, 49, 75, 0.10);
+  border-radius: 2px;
+}
+.donemd-inline-diff__ins {
+  color: #1a7f37;
+  background: rgba(26, 127, 55, 0.14);
+  border-radius: 2px;
+}
+.donemd-inline-diff__equal {
+  color: var(--donemd-text, #1f2328);
+}
+.donemd-inline-diff__actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 8px;
+  vertical-align: baseline;
+}
+.donemd-inline-diff__btn {
+  font-size: 0.8em;
+  line-height: 1.4;
+  padding: 1px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--donemd-border, #d0d7de);
+  background: var(--donemd-surface, #ffffff);
+  color: var(--donemd-text, #1f2328);
+  cursor: pointer;
+}
+.donemd-inline-diff__btn:hover { background: rgba(10, 132, 255, 0.10); }
+.donemd-inline-diff__btn--revert { color: #c4314b; }
+
+@media (prefers-color-scheme: dark) {
+  .donemd-inline-diff__del { color: #ff7b93; background: rgba(255, 123, 147, 0.14); }
+  .donemd-inline-diff__ins { color: #5ed17e; background: rgba(94, 209, 126, 0.16); }
+  .donemd-inline-diff__btn {
+    border-color: #3a3f44;
+    background: #2a2d30;
+    color: #e6e6e6;
+  }
+  .donemd-inline-diff__btn--revert { color: #ff7b93; }
+}
+
+/* --- Code block dark theme (Phase 5 M1) --------------------------------
+ * Before Phase 5 the editor had NO dark styling for code blocks — `.ProseMirror
+ * pre` stayed light `#f8f8f8` on a dark page. Fix the chrome here and swap the
+ * hljs token palette to `github-dark`. */
+/* System dark — code chrome + github-dark hljs palette, as VALUES for the
+   variables defined in :root. Guarded by :not([data-theme]) so the explicit
+   paper/night code palettes below aren't clobbered when the OS is dark. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --md-code-bg: #2d333b;
+    --md-pre-bg: #15171A;      /* fenced code block fill (user-specified) */
+    --md-code-fg: #c9d1d9;
+    --hl-red: #ff7b72;
+    --hl-purple: #d2a8ff;
+    --hl-blue: #79c0ff;
+    --hl-string: #a5d6ff;
+    --hl-orange: #ffa657;
+    --hl-comment: #8b949e;
+    --hl-green: #7ee787;
+    --hl-base: #c9d1d9;
+    --hl-section: #1f6feb;
+    --hl-bullet: #f2cc60;
+    --hl-add-fg: #aff5b4; --hl-add-bg: #033a16;
+    --hl-del-fg: #ffdcd7; --hl-del-bg: #67060c;
+  }
+  :root:not([data-theme]) .donemd-codeblock__copy {
+    color: #adbac7;
+    background: rgba(28, 33, 40, 0.85);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  :root:not([data-theme]) .donemd-codeblock__copy:hover {
+    background: #22272e;
+    color: #f0f6fc;
+  }
+  :root:not([data-theme]) .donemd-codeblock__copy.is-copied {
+    color: #57d364;
+    border-color: rgba(87, 211, 100, 0.4);
+  }
+
+  /* Raw block (#80 S8) — single container fill (#15171A); inner <pre>
+     transparent so it isn't a box-in-a-box (inner pre otherwise takes
+     --md-pre-bg and nests two fills). Base raw block is light-only. */
+  :root:not([data-theme]) .donemd-raw-block { background: #15171A; border-color: #2a2e35; }
+  :root:not([data-theme]) .donemd-raw-block__content { background: transparent; color: #b8bcc4; }
+  :root:not([data-theme]) .donemd-raw-block__hint {
+    background: rgba(21, 23, 26, 0.85);
+    color: #8b9099;
+  }
+
+  /* Mermaid render canvas. */
+  :root:not([data-theme]) .donemd-mermaid__render { background: #15171A; border-color: #2a2e35; }
+}
+
+/* 纸质 (paper) code palette — warm terminal on cream. No cold blues; keywords
+   rust, strings olive, functions amber. Code chrome is a slightly deeper cream
+   so blocks read as inset without a grey box. (#80 S8) */
+:root[data-theme="paper"] {
+  --md-code-bg: #FFF9F4;     /* inline code fill (user-specified) */
+  --md-pre-bg: #FFF9F4;      /* fenced code block fill (user-specified) */
+  --md-code-fg: #3a332b;
+  --hl-red: #a8492c;         /* keyword — terracotta (warm red, less yellow) */
+  --hl-purple: #915b3a;      /* function — warm clay-brown */
+  --hl-blue: #6f6a3c;        /* number/attr — muted olive */
+  --hl-string: #5f6b3a;      /* string — moss */
+  --hl-orange: #b06336;      /* built_in — burnt sienna */
+  --hl-comment: #a99e8c;     /* comment — soft warm grey */
+  --hl-green: #6b7638;       /* name — warm green */
+  --hl-base: #3a332b;
+  --hl-section: #a8492c;
+  --hl-bullet: #9a5637;
+  --hl-add-fg: #5f6b3a; --hl-add-bg: rgba(95, 107, 58, 0.12);
+  --hl-del-fg: #a8492c; --hl-del-bg: rgba(168, 73, 44, 0.10);
+}
+:root[data-theme="paper"] .donemd-codeblock__copy {
+  color: #8a7d6a;
+  background: rgba(242, 237, 227, 0.85);
+  border-color: rgba(138, 125, 106, 0.26);
+}
+:root[data-theme="paper"] .donemd-codeblock__copy:hover {
+  background: #f6f1e9;
+  color: #3a332b;
+}
+
+/* 赛博夜色 (night) code palette — low-saturation CLI on deep blue-charcoal.
+   Cyan/slate/dusty-violet, deliberately muted so it reads "cool terminal"
+   without neon glow. Code chrome a touch bluer/darker than the canvas. */
+:root[data-theme="night"] {
+  --md-code-bg: #242F40;     /* inline code fill (user-specified) */
+  --md-pre-bg: #12171F;      /* fenced code block fill (user-specified) */
+  --md-code-fg: #b8c0cc;
+  --hl-red: #c98a8a;         /* keyword — dusty rose */
+  --hl-purple: #9a8cb0;      /* function — dusty violet */
+  --hl-blue: #7fa8c9;        /* number/attr — steel blue */
+  --hl-string: #8aab8f;      /* string — muted green */
+  --hl-orange: #c9a98a;      /* built_in — dusty tan */
+  --hl-comment: #5a6473;     /* comment — dim slate */
+  --hl-green: #85b0a0;       /* name — desaturated teal */
+  --hl-base: #b8c0cc;
+  --hl-section: #7fa8c9;
+  --hl-bullet: #c9a98a;
+  --hl-add-fg: #8aab8f; --hl-add-bg: rgba(138, 171, 143, 0.14);
+  --hl-del-fg: #c98a8a; --hl-del-bg: rgba(201, 138, 138, 0.14);
+}
+:root[data-theme="night"] .donemd-codeblock__copy {
+  color: #8a94a3;
+  background: rgba(20, 26, 34, 0.85);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="night"] .donemd-codeblock__copy:hover {
+  background: #1e2530;
+  color: #d5dce6;
+}
+
+/* #69: [[AI 唤起]] line-start gray hint — Notion-style placeholder after the
+ * caret in an empty paragraph. Non-selectable, doesn't take layout space the
+ * caret cares about (it trails the cursor). Follows the system theme. */
+.donemd-ai-hint {
+  color: var(--donemd-muted, #9aa0a6);
+  pointer-events: none;
+  user-select: none;
+  font-size: 0.95em;
+}
+
+/* #69: when the ⌘/ panel is open over a selection, suppress the bubble menu so
+ * the two don't stack. tippy positions .donemd-bubble's wrapper inline, so we
+ * hide the bubble element itself (the wrapper stays, just empty). */
+body.donemd-slash-open .donemd-bubble {
+  visibility: hidden !important;
+}
+
+/* Bubble menu "AI ▾" button + dropdown. */
+.donemd-bubble__ai { font-weight: 600; }
+.donemd-bubble__ai-menu {
+  position: absolute;
+  top: 100%;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+  background: var(--donemd-bubble-bg, #2c2c2e);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  z-index: 10;
+}
+.donemd-bubble__ai-item {
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.donemd-bubble__ai-item:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* Grouped dropdown (S4 #65): a faint title per group, hairline separators. */
+.donemd-bubble__ai-group {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 6px 10px 2px;
+  user-select: none;
+}
+.donemd-bubble__ai-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(255, 255, 255, 0.1);
+}
+/* Footer keyboard-discoverability hint (PRD story 55). */
+.donemd-bubble__ai-hint {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  padding: 5px 10px 6px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  user-select: none;
+}
+/* Sub-layer for parameterized commands (自定义改写 / 翻译为…). */
+.donemd-bubble__ai-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 6px 2px;
+}
+.donemd-bubble__ai-input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  color: inherit;
+  padding: 5px 8px;
+  font-size: 13px;
+  min-width: 160px;
+}
+.donemd-bubble__ai-input::placeholder { color: rgba(255, 255, 255, 0.4); }
+.donemd-bubble__ai-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* AI toast — one visual language (dark glass, matches the bubble menu) for
+ * all three kinds. Position is unified top-center across progress / done /
+ * error (app-wide rule, real-machine feedback) — only the accent differs. */
+.donemd-ai-toast {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;          /* buttons drop to a 2nd line rather than
+                               overflowing the (pane-width) webview and being
+                               clipped at the right edge */
+  gap: 6px 8px;
+  /* Compact card, sized to content — reads as a contextual notice, not a
+     full-width banner (HIG: match feedback to cognitive cost; don't
+     interrupt routine recoverable failures with alarm-level chrome).
+     Capped to the pane width minus a margin so it never clips. */
+  width: max-content;
+  max-width: calc(100vw - 28px);
+  padding: 7px 10px 7px 12px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+  /* Follows the system theme (WKWebView reports prefers-color-scheme).
+     Dark values here; light overrides in the media query below. */
+  color: #f5f5f7;
+  background: rgba(44, 44, 46, 0.92);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  -webkit-font-smoothing: antialiased;
+  pointer-events: auto;
+}
+@media (prefers-color-scheme: light) {
+  .donemd-ai-toast {
+    color: #1d1d1f;
+    background: rgba(250, 250, 250, 0.96);
+    border: 0.5px solid rgba(0, 0, 0, 0.1);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.16);
+  }
+}
+/* All kinds share one anchor: top-center. */
+.donemd-ai-toast--progress,
+.donemd-ai-toast--done,
+.donemd-ai-toast--error {
+  top: 14px; left: 50%; transform: translateX(-50%);
+}
+.donemd-ai-toast--done {
+  transition: opacity 0.4s ease;
+}
+/* Failure: same card, a slim red status dot before the text instead of a
+ * loud full-red banner. */
+.donemd-ai-toast--error .donemd-ai-toast__text::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #ff453a;
+  vertical-align: middle;
+}
+.donemd-ai-toast__text { white-space: nowrap; }
+/* Buttons share one size; primary (重试) is filled accent, secondary is ghost. */
+.donemd-ai-toast__btn {
+  border: none;
+  padding: 4px 11px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease;
+}
+.donemd-ai-toast__btn:first-of-type {
+  background: #0a84ff; color: #fff;
+}
+.donemd-ai-toast__btn:first-of-type:hover { background: #339cff; }
+.donemd-ai-toast__btn:not(:first-of-type) {
+  background: rgba(255, 255, 255, 0.14); color: #f5f5f7;
+}
+.donemd-ai-toast__btn:not(:first-of-type):hover { background: rgba(255, 255, 255, 0.24); }
+.donemd-ai-toast__close {
+  background: transparent; border: none; color: #f5f5f7;
+  font-size: 15px; line-height: 1; cursor: pointer;
+  padding: 2px 4px; margin-left: 2px;
+  opacity: 0.55;
+}
+@media (prefers-color-scheme: light) {
+  /* Secondary button + close need dark ink on the light card. */
+  .donemd-ai-toast__btn:not(:first-of-type) {
+    background: rgba(0, 0, 0, 0.08); color: #1d1d1f;
+  }
+  .donemd-ai-toast__btn:not(:first-of-type):hover { background: rgba(0, 0, 0, 0.14); }
+  .donemd-ai-toast__close { color: #1d1d1f; }
+}
+.donemd-ai-toast__close:hover { opacity: 1; }
+/* Brief flash when a concurrent request is ignored (PRD 27). */
+.donemd-ai-toast--flash { animation: donemd-ai-flash 0.6s ease; }
+@keyframes donemd-ai-flash {
+  0%, 100% { transform: translateX(-50%); }
+  25% { transform: translateX(calc(-50% - 4px)); }
+  75% { transform: translateX(calc(-50% + 4px)); }
+}
+
+/* Slash command panel (#67) — Spotlight-style list anchored at the caret.
+ * Light card that follows the system theme (it sits in the document, unlike
+ * the deliberately-dark bubble menu). */
+.donemd-slash {
+  position: fixed;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 4px;
+  border-radius: 9px;
+  background: rgba(250, 250, 250, 0.98);
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.donemd-slash__item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.donemd-slash__item.is-active { background: rgba(10, 132, 255, 0.14); }
+.donemd-slash__label { font-size: 13px; color: #1d1d1f; }
+.donemd-slash__hint { font-size: 11px; color: #86868b; }
+
+/* Slash mini-input (topic / free prompt). Caret-anchored card. */
+.donemd-slash-input {
+  position: fixed;
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 260px;
+  max-width: 360px;
+  padding: 8px;
+  border-radius: 9px;
+  background: rgba(250, 250, 250, 0.98);
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+}
+.donemd-slash-input__field {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: #1d1d1f;
+  background: #fff;
+  resize: vertical;
+}
+textarea.donemd-slash-input__field { min-height: 64px; }
+.donemd-slash-input__field:focus { outline: none; border-color: rgba(10, 132, 255, 0.6); }
+.donemd-slash-input__provider {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 5px;
+}
+.donemd-slash-input__hint { font-size: 11px; color: #86868b; }
+
+@media (prefers-color-scheme: dark) {
+  .donemd-slash, .donemd-slash-input {
+    background: rgba(44, 44, 46, 0.96);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+  .donemd-slash__label { color: #f5f5f7; }
+  .donemd-slash__hint, .donemd-slash-input__hint { color: #98989d; }
+  .donemd-slash-input__field { background: rgba(0, 0, 0, 0.25); color: #f5f5f7; border-color: rgba(255, 255, 255, 0.15); }
+}
+
+/* --- Reading surface: dark theme (Phase 5 M4 #76) -----------------------
+ * The base body text / headings / tables had NO dark override before M4 —
+ * near-black ink on the dark canvas. Re-point the M4 content tokens so prose
+ * and tables coordinate on dark. Inline `code` + code-block chrome + hljs
+ * palette are handled in the M1 dark block above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --md-ink: #e3e3e6;
+    --md-heading: #f2f2f4;
+    --md-muted: #9a9aa0;
+    --md-rule: #3a3a3e;
+    --md-th-bg: rgba(255, 255, 255, 0.06);
+    --md-scroll-thumb: rgba(255, 255, 255, 0.24);
+    --md-scroll-thumb-hover: rgba(255, 255, 255, 0.38);
+  }
+  /* Cell selection reads as a translucent accent on the dark surface rather
+     than the opaque light-blue (kept subtle; interaction still #16). */
+  :root:not([data-theme]) .ProseMirror table .selectedCell {
+    background: rgba(10, 132, 255, 0.28);
+  }
+}
+
+/* 纸质 (paper) prose tokens — warm ink on off-white (#80 S8). Body/heading are
+   a soft warm charcoal-brown (not pure black), so text sits in the same warm
+   family as the cream surface instead of clashing. Claude-brand feel. */
+:root[data-theme="paper"] {
+  --md-ink: #3a332b;         /* warm charcoal-brown body, not #000 */
+  --md-heading: #2b2620;     /* headings a touch deeper, same warm hue */
+  --md-muted: #8a7d6a;       /* muted taupe */
+  --md-rule: #cbbca0;        /* warm hairline — deeper so hr/borders read clearly */
+  --md-th-bg: rgba(120, 100, 60, 0.09);
+  --md-scroll-thumb: rgba(90, 70, 40, 0.30);       /* warm taupe thumb */
+  --md-scroll-thumb-hover: rgba(90, 70, 40, 0.44);
+}
+
+/* Paper texture (#80 S8) — "laid paper" (帘纹纸): fine horizontal laid lines +
+   spaced-out chain lines + a fiber grain. IMPORTANT: painted with a NORMAL
+   blend (not multiply). The paper tint is a Swift NSView *behind* the
+   transparent WebView, so it's not in the page's compositing — a multiply
+   overlay would have nothing to multiply against and render invisible (that was
+   the earlier "no texture" bug). Semi-transparent brown marks in normal mode
+   are visible on top of whatever shows through. Fixed + non-interactive; only
+   the Visual canvas carries it. */
+:root[data-theme="paper"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.9;
+  background-color: transparent;
+  background-image:
+    /* fiber grain */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.6' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.45  0 0 0 0 0.37  0 0 0 0 0.28  0 0 0 0.10 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+    /* chain lines — bold, widely spaced, soft-edged (gradient fade, not a hard
+       1px switch) so the line reads as a gentle band rather than a printed rule */
+    repeating-linear-gradient(0deg,
+      transparent 0px,
+      rgba(120, 95, 60, 0.05) 1px,
+      transparent 2.5px,
+      transparent 44px),
+    /* laid lines — fine horizontal texture, also soft-edged and more spaced */
+    repeating-linear-gradient(0deg,
+      transparent 0px,
+      rgba(120, 95, 60, 0.028) 0.75px,
+      transparent 1.5px,
+      transparent 8px);
+  background-size: 180px 180px, 100% 44px, 100% 8px;
+}
+/* Content sits above the texture. */
+:root[data-theme="paper"] #editor { position: relative; z-index: 1; }
+
+/* 纸质 (paper) component overrides (#80 S8, user-specified colors). Callout
+   fills/borders, raw block, and mermaid canvas — these don't flow from the
+   --md-* tokens, so they're set explicitly here. */
+
+/* Callouts — 5 types: user-specified fill + white border. Icon/text colors kept
+   from the base rules (they read fine on these light fills). */
+:root[data-theme="paper"] .donemd-callout--note      { background: #DBE2F0; border-color: #FFFFFF; }
+:root[data-theme="paper"] .donemd-callout--tip       { background: #DBEBDA; border-color: #FFFFFF; }
+:root[data-theme="paper"] .donemd-callout--important { background: #E8D4F2; border-color: #FFFFFF; }
+:root[data-theme="paper"] .donemd-callout--warning   { background: #F2E7CB; border-color: #FFFFFF; }
+:root[data-theme="paper"] .donemd-callout--caution   { background: #F6DBDB; border-color: #FFFFFF; }
+
+/* Raw block — single container fill (#FFF9F4). The inner <pre> is made
+   transparent so the block isn't a box-in-a-box (the inner pre otherwise picks
+   up --md-pre-bg and nests two fills). */
+:root[data-theme="paper"] .donemd-raw-block { background: #FFF9F4; }
+:root[data-theme="paper"] .donemd-raw-block__content { background: transparent; }
+
+/* Mermaid render canvas. */
+:root[data-theme="paper"] .donemd-mermaid__render { background: #FFF9F4; }
+
+/* 赛博夜色 (night) prose tokens — cool blue-grey on deep charcoal. */
+:root[data-theme="night"] {
+  --md-ink: #c4ccd8;
+  --md-heading: #e2e8f0;
+  --md-muted: #7d8794;
+  --md-rule: #2a333f;
+  --md-th-bg: rgba(120, 150, 190, 0.10);
+  --md-scroll-thumb: rgba(160, 190, 220, 0.26);
+  --md-scroll-thumb-hover: rgba(160, 190, 220, 0.40);
+}
+:root[data-theme="night"] .ProseMirror table .selectedCell {
+  background: rgba(110, 163, 173, 0.26);
+}
+
+/* 赛博夜色 (night) component overrides (#80 S8, user-specified colors). Callout
+   fill/border/text+icon, raw block, mermaid canvas — not derived from --md-*. */
+
+/* Callouts — 5 types: fill + border + text/icon all user-specified. */
+:root[data-theme="night"] .donemd-callout--note      { background: #0F2341; border-color: #344975; color: #7EA8C9; }
+:root[data-theme="night"] .donemd-callout--note .donemd-callout__icon      { color: #7EA8C9; }
+:root[data-theme="night"] .donemd-callout--tip       { background: #092F36; border-color: #21646A; color: #6EA3AC; }
+:root[data-theme="night"] .donemd-callout--tip .donemd-callout__icon       { color: #6EA3AC; }
+:root[data-theme="night"] .donemd-callout--important { background: #241C45; border-color: #5C49A9; color: #9B8BB0; }
+:root[data-theme="night"] .donemd-callout--important .donemd-callout__icon { color: #9B8BB0; }
+:root[data-theme="night"] .donemd-callout--warning   { background: #352C04; border-color: #5C5B0D; color: #C99D8A; }
+:root[data-theme="night"] .donemd-callout--warning .donemd-callout__icon   { color: #C99D8A; }
+:root[data-theme="night"] .donemd-callout--caution   { background: #330A17; border-color: #772135; color: #C98A90; }
+:root[data-theme="night"] .donemd-callout--caution .donemd-callout__icon   { color: #C98A90; }
+
+/* Inline code text color (user-specified). Base rule sets no color, so inline
+   `code` inherits body ink otherwise. */
+:root[data-theme="night"] .ProseMirror code { color: #8EA8CA; }
+:root[data-theme="night"] .ProseMirror pre code { color: inherit; } /* fenced keeps hljs/base */
+
+/* Raw block — single container fill (#12171F); inner <pre> transparent so the
+   block isn't a box-in-a-box (inner pre otherwise picks up --md-pre-bg). The
+   "在 Markdown 源 编辑" hint chip gets a dark fill (base is a light white chip). */
+:root[data-theme="night"] .donemd-raw-block { background: #12171F; border-color: #2a3a52; }
+:root[data-theme="night"] .donemd-raw-block__content { background: transparent; }
+:root[data-theme="night"] .donemd-raw-block__hint {
+  background: rgba(20, 28, 42, 0.85);
+  color: #7d8794;
+}
+
+/* Mermaid render canvas. */
+:root[data-theme="night"] .donemd-mermaid__render { background: #12171F; border-color: #2a3a52; }
+

@@ -1,0 +1,284 @@
+/* Phase 5 S3 (#75) — Markdown 源 pane 排版精致化. Polishes the CodeMirror
+ * source view from the Phase 1 "能用" baseline: a proper monospace stack,
+ * comfortable size/line-height/padding, and Markdown syntax coloring that
+ * follows the system theme. Pure styling — the pane stays read-only
+ * (bidirectional sync is a separate later batch). */
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+
+  /* Source-pane content tokens (light). Dark overrides in the media query
+     at the end. Kept under a `cmd-` prefix, distinct from visual.css's
+     `--md-*`, since the two panes are separate documents/bundles. */
+  --cmd-ink: #2b2b30;          /* base source text */
+  --cmd-mark: #a3a3ab;         /* markup punctuation: # * > ` - */
+  --cmd-heading: #1a5fb4;      /* heading text — a calm blue */
+  --cmd-strong: #9a3f00;       /* bold */
+  --cmd-emphasis: #6a4b16;     /* italic */
+  --cmd-strike: #8a8a90;       /* strikethrough */
+  --cmd-link: #0a6cff;         /* link / url */
+  --cmd-code: #1a7f5a;         /* inline + fenced code content */
+  --cmd-quote: #6b6b72;        /* blockquote */
+  --cmd-list: #7a4dd0;         /* list bullet markers */
+  --cmd-selection: rgba(10, 108, 255, 0.16);
+  --cmd-math-error: #cc0000;   /* broken-formula flag (S9 M2) */
+  --cmd-math-error-bg: rgba(204, 0, 0, 0.09);
+  --cmd-scroll-thumb: rgba(0, 0, 0, 0.22);        /* vertical scrollbar thumb */
+  --cmd-scroll-thumb-hover: rgba(0, 0, 0, 0.34);  /* … on hover */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* Transparent so the tinted native canvas shows through (Phase 5 polish).
+     WKWebView also has drawsBackground=false. */
+  background: transparent;
+  color: var(--cmd-ink);
+}
+
+#source {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.cm-editor {
+  height: 100%;
+  background: transparent;
+}
+
+/* Monospace stack tuned for code readability: prefer the modern variable SF
+   Mono / system mono, then common cross-platform fallbacks. Slightly larger
+   than Phase 1 (13→13.5) with a roomier line-height for a calm source view. */
+.cm-content {
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Cascadia Code',
+    'JetBrains Mono', Consolas, monospace !important;
+  font-size: 13.5px;
+  line-height: 1.7;
+  /* Left/right breathing room so source text isn't flush to the pane edge —
+     narrower than the Visual pane's 60px (this is a denser source view).
+     !important: CodeMirror injects its own `.cm-content{padding:4px 0}` at
+     equal specificity, which otherwise wins the cascade (same reason
+     font-family below needs it). */
+  padding: 20px 40px 96px !important;
+  color: var(--cmd-ink);
+  -webkit-font-smoothing: antialiased;
+}
+.cm-editor .cm-line {
+  padding: 0;
+}
+
+/* No line numbers — this is a reading projection of the document, not a code
+   editor; line numbers would add noise and imply editability. But we DO keep
+   the fold gutter (标题折叠), so the source pane can fold heading sections in
+   lockstep with the Visual pane. Hide the gutters' chrome (border/background)
+   and the line-number column specifically, leaving only the fold markers. */
+.cm-gutters {
+  border: none !important;
+  background: transparent !important;
+}
+.cm-gutter.cm-lineNumbers { display: none !important; }
+
+/* Fold gutter (标题折叠): enlarge the ▸/▾ markers so they're legible — the
+   CodeMirror defaults render tiny. The gutter sits in the left padding of the
+   reading column. */
+.cm-gutter.cm-foldGutter {
+  width: 1.2em;
+  min-width: 1.2em;
+}
+.cm-foldGutter .cm-gutterElement {
+  font-size: 0.95rem;
+  line-height: inherit;
+  text-align: center;
+  cursor: pointer;
+  color: var(--cmd-mark);
+  transition: color 0.12s ease;
+}
+.cm-foldGutter .cm-gutterElement:hover {
+  color: var(--cmd-ink);
+}
+
+/* The inline placeholder CodeMirror inserts where a section is folded ("…").
+   Make it an obvious accent-colored affordance — the only cue that content is
+   hidden here and the click target to re-expand, mirroring the Visual pane's
+   collapsed chevron. */
+.cm-foldPlaceholder {
+  background: transparent;
+  border: none;
+  color: #0a84ff;
+  font-weight: 700;
+  padding: 0 0.4em;
+  margin: 0 0.2em;
+  cursor: pointer;
+}
+
+/* 飞书占位块 chip — the folded form of a `<!-- feishu-placeholder -->` comment.
+   A compact, non-monospace label ("🖌️ 画板：架构图") that reads as a card, not
+   code: the sync metadata (block_id / block_token) stays on disk but out of the
+   reader's way. Click to expand the raw fields; the gutter arrow re-folds.
+   Composed entirely from the theme's --cmd-* tokens so it follows all four
+   palettes (light / system-dark / paper / night) with no per-theme rules. */
+.cmd-feishu-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  /* Break out of the monospace .cm-content stack — this is a UI label. */
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--cmd-quote);
+  background: var(--cmd-selection);
+  border: 1px solid var(--cmd-mark);
+  border-radius: 6px;
+  padding: 1px 9px;
+  margin: 0;
+  cursor: pointer;
+  user-select: none;
+  vertical-align: baseline;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.cmd-feishu-chip:hover {
+  color: var(--cmd-ink);
+  border-color: var(--cmd-link);
+}
+
+/* CodeMirror paints its own scroller background; keep it transparent so the
+   native tinted canvas shows through like the rest of the chrome. */
+.cm-scroller { background: transparent; font-family: inherit; }
+
+/* Vertical scrollbar — matched 1:1 with the Visual pane (visual.css) so both
+   panes show the same thin, theme-tinted bar flush to the edge. `overflow-y:
+   scroll` keeps the bar always present (no appear/vanish flicker on sidebar
+   toggle); the thumb has no inset border, so it sits flush like the Visual pane. */
+.cm-scroller {
+  overflow-y: scroll;
+}
+.cm-scroller::-webkit-scrollbar {
+  width: 8px;
+}
+.cm-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cm-scroller::-webkit-scrollbar-thumb {
+  background: var(--cmd-scroll-thumb);
+  border-radius: 4px;
+}
+.cm-scroller::-webkit-scrollbar-thumb:hover {
+  background: var(--cmd-scroll-thumb-hover);
+}
+
+/* Read-only affordance (Phase 1 promise, unchanged): no caret, no focus
+   ring, text still selectable for copy. */
+.cm-cursor,
+.cm-dropCursor {
+  display: none !important;
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-editor .cm-content {
+  caret-color: transparent !important;
+  user-select: text;
+  -webkit-user-select: text;
+}
+/* Read-only, so no active-line highlight (it implies an insertion point). */
+.cm-activeLine { background: transparent !important; }
+.cm-activeLineGutter { background: transparent !important; }
+
+/* Selection (for copy) — a soft brand-tinted band in both themes. */
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionBackground,
+.cm-editor ::selection {
+  background: var(--cmd-selection) !important;
+}
+
+/* --- Markdown syntax coloring (classes assigned in markdown-source.ts) --- */
+.cmd-md-heading { color: var(--cmd-heading); font-weight: 700; }
+.cmd-md-strong  { color: var(--cmd-strong); font-weight: 700; }
+.cmd-md-emphasis { color: var(--cmd-emphasis); font-style: italic; }
+.cmd-md-strike  { color: var(--cmd-strike); text-decoration: line-through; }
+.cmd-md-link    { color: var(--cmd-link); text-decoration: underline; }
+.cmd-md-code    { color: var(--cmd-code); }
+.cmd-md-quote   { color: var(--cmd-quote); font-style: italic; }
+.cmd-md-list    { color: var(--cmd-list); }
+/* Structural punctuation (#, *, >, `, -) dimmed so prose reads first. */
+.cmd-md-mark    { color: var(--cmd-mark); }
+/* Broken formula (S9 M2): red text + faint red wash + wavy underline, mirroring
+   the Visual pane's is-error treatment so a bad `$…$` reads as broken on both
+   sides. Overrides syntax color via specificity + !important (the range mark
+   layers over lezer's code coloring of the same span). */
+.cmd-md-math-error {
+  color: var(--cmd-math-error) !important;
+  background: var(--cmd-math-error-bg);
+  text-decoration: underline wavy var(--cmd-math-error);
+  text-underline-offset: 2px;
+}
+
+/* System dark — only when NO explicit writing theme is set (#80 S8). The
+   `:not([data-theme])` guard keeps the paper/night palettes below from being
+   clobbered by the OS being in dark mode. `.system` theme removes the attribute
+   so this rule governs it, preserving the pre-S8 light/dark behavior. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --cmd-ink: #c9c9d0;
+    --cmd-mark: #6b6b74;
+    --cmd-heading: #6cb0ff;
+    --cmd-strong: #ffb37a;
+    --cmd-emphasis: #e6c88a;
+    --cmd-strike: #7a7a82;
+    --cmd-link: #7db4ff;
+    --cmd-code: #7ee0b0;
+    --cmd-quote: #9a9aa2;
+    --cmd-list: #c4a8ff;
+    --cmd-selection: rgba(120, 170, 255, 0.22);
+    --cmd-math-error: #ff7b72;   /* brighter red for legibility on dark */
+    --cmd-math-error-bg: rgba(255, 123, 114, 0.13);
+    --cmd-scroll-thumb: rgba(255, 255, 255, 0.24);
+    --cmd-scroll-thumb-hover: rgba(255, 255, 255, 0.38);
+  }
+}
+
+/* 纸质 (paper) — warm, no cold blues. Heading/link/code shift into the
+   brown-amber-terracotta family so the source view feels like ink on cream.
+   Set from Swift via <html data-theme="paper"> (#80 S8). */
+:root[data-theme="paper"] {
+  --cmd-ink: #3a332b;          /* warm charcoal-brown ink, not #000 */
+  --cmd-mark: #b8ac96;         /* faded warm-grey markup punctuation */
+  --cmd-heading: #a8492c;      /* terracotta (warm red, less yellow) */
+  --cmd-strong: #96341a;       /* deep rust */
+  --cmd-emphasis: #7a5a2a;     /* clay-brown italic */
+  --cmd-strike: #a99e8c;
+  --cmd-link: #b06336;         /* burnt sienna link */
+  --cmd-code: #5f6b3a;         /* moss green (warm, not teal) */
+  --cmd-quote: #8a7d6a;        /* muted taupe */
+  --cmd-list: #9a5637;         /* burnt orange bullets */
+  --cmd-selection: rgba(176, 99, 54, 0.15);
+  --cmd-math-error: #c0392b;   /* brick red, sits in the warm palette */
+  --cmd-math-error-bg: rgba(192, 57, 43, 0.10);
+  --cmd-scroll-thumb: rgba(90, 70, 40, 0.30);       /* warm taupe thumb */
+  --cmd-scroll-thumb-hover: rgba(90, 70, 40, 0.44);
+}
+
+/* 赛博夜色 (night) — deep blue-tinted dark, desaturated CLI palette. Low
+   saturation on purpose: cyan/slate/dusty-violet that read "cool terminal"
+   without glowing. Set via <html data-theme="night"> (#80 S8). */
+:root[data-theme="night"] {
+  --cmd-ink: #b8c0cc;          /* cool blue-grey base text */
+  --cmd-mark: #5a6473;         /* dim slate markup punctuation */
+  --cmd-heading: #7fa8c9;      /* muted steel blue */
+  --cmd-strong: #c9a98a;       /* dusty tan */
+  --cmd-emphasis: #9fb0a2;     /* sage */
+  --cmd-strike: #5a6473;
+  --cmd-link: #6ea3ad;         /* desaturated cyan */
+  --cmd-code: #8aab8f;         /* muted green */
+  --cmd-quote: #7d8794;
+  --cmd-list: #9a8cb0;         /* dusty violet bullets */
+  --cmd-selection: rgba(110, 163, 173, 0.20);
+  --cmd-math-error: #e5786d;   /* desaturated coral, legible on deep blue */
+  --cmd-math-error-bg: rgba(229, 120, 109, 0.12);
+  --cmd-scroll-thumb: rgba(160, 190, 220, 0.26);
+  --cmd-scroll-thumb-hover: rgba(160, 190, 220, 0.40);
+}
