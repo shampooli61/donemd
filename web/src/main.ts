@@ -19,7 +19,7 @@ import { MermaidCodeBlock } from './mermaid-codeblock';
 import { MathInline } from './math-inline';
 import { MathBlock } from './math-block';
 import { isMathBroken } from './katex-render';
-import { createBubbleMenu, runFormatCommand } from './bubble-menu';
+import { createBubbleMenu, runFormatCommand, toggleHeading } from './bubble-menu';
 import type { AICommandItem } from './bubble-menu';
 import { AIStreaming, aiStreamingKey } from './ai-streaming';
 import { InlineDiff, inlineDiffKey } from './inline-diff';
@@ -45,14 +45,6 @@ import './visual.css';
 import 'katex/dist/katex.min.css';
 import { on, request, send } from './bridge';
 
-// Whether the current selection sits inside a table cell (header or body).
-// Used to forbid headings there: GFM table cells can't encode a heading level
-// on disk, so a header styled as a heading would silently revert to plain text
-// on save/reopen (#76). We block the operation instead of losing it later.
-function selectionInTableCell(editor: Editor): boolean {
-  return editor.isActive('tableCell') || editor.isActive('tableHeader');
-}
-
 // --- Heading: replace StarterKit's default Mod-Alt-N with our Mod-Shift-N
 // (matching Notion / Bear / Typora). StarterKit's heading is disabled
 // below so this override wins. Headings inside table cells are refused —
@@ -60,8 +52,8 @@ function selectionInTableCell(editor: Editor): boolean {
 const DonemdHeading = Heading.extend({
   addKeyboardShortcuts() {
     const toggle = (level: 1 | 2 | 3) => (): boolean => {
-      if (selectionInTableCell(this.editor)) return true;
-      return this.editor.commands.toggleHeading({ level });
+      toggleHeading(this.editor, level);
+      return true;
     };
     return {
       'Mod-Shift-1': toggle(1),

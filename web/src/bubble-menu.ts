@@ -30,7 +30,32 @@ interface BubbleButton {
   tooltip: string;
   action: ButtonHandler;
   isActive?: IsActiveQuery;
+  isEnabled?: IsActiveQuery;
 }
+
+/** All heading entry points share the table-cell restriction: GFM cannot
+ * persist heading levels in cells. */
+export function canToggleHeading(editor: Editor): boolean {
+  if (!editor.isEditable) return false;
+  let inTable = editor.isActive('tableCell') || editor.isActive('tableHeader');
+  editor.state.doc.nodesBetween(editor.state.selection.from, editor.state.selection.to, (node) => {
+    if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') inTable = true;
+  });
+  return !inTable;
+}
+
+export function toggleHeading(editor: Editor, level: 1 | 2 | 3): void {
+  if (canToggleHeading(editor)) editor.chain().focus().toggleHeading({ level }).run();
+}
+
+const HEADING_BUTTONS: BubbleButton[] = ([1, 2, 3] as const).map((level) => ({
+  cmd: `heading${level}`,
+  label: `H${level}`,
+  tooltip: `标题 ${level} (Cmd+Shift+${level})`,
+  action: (editor) => toggleHeading(editor, level),
+  isActive: (editor) => editor.isActive('heading', { level }),
+  isEnabled: canToggleHeading,
+}));
 
 const FORMAT_BUTTONS: BubbleButton[] = [
   {
@@ -134,7 +159,7 @@ const CONTAINER_BUTTONS: BubbleButton[] = [
   },
 ];
 
-const ALL_BUTTONS = [...FORMAT_BUTTONS, ...BLOCK_BUTTONS, ...CONTAINER_BUTTONS];
+const ALL_BUTTONS = [...HEADING_BUTTONS, ...FORMAT_BUTTONS, ...BLOCK_BUTTONS, ...CONTAINER_BUTTONS];
 
 /** Run a format command by its `cmd` name — the SAME action the bubble button
  *  would run. This is the single source of truth shared by two entry points:
@@ -277,6 +302,8 @@ export function createBubbleMenu(): BubbleHandle {
     root.appendChild(divider);
   };
 
+  buildGroup(HEADING_BUTTONS);
+  addDivider();
   buildGroup(FORMAT_BUTTONS);
   addDivider();
   buildGroup(BLOCK_BUTTONS);
@@ -463,6 +490,8 @@ export function createBubbleMenu(): BubbleHandle {
           if (!el) continue;
           const active = b.isActive ? b.isActive(editor) : false;
           el.classList.toggle('is-active', active);
+          if (b.isActive) el.setAttribute('aria-pressed', String(active));
+          el.disabled = b.isEnabled ? !b.isEnabled(editor) : false;
         }
       };
       editor.on('selectionUpdate', refresh);

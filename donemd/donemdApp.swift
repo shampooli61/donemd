@@ -142,6 +142,15 @@ struct DonemdApp: App {
                 // the File entries above use). 图片… still routes through the
                 // NSEvent monitor for ⌘⇧I.
                 CommandMenu("格式") {
+                    Button("标题 1（H1）") { runFormat("heading1") }
+                        .keyboardShortcut("1", modifiers: [.command, .shift])
+                    Button("标题 2（H2）") { runFormat("heading2") }
+                        .keyboardShortcut("2", modifiers: [.command, .shift])
+                    Button("标题 3（H3）") { runFormat("heading3") }
+                        .keyboardShortcut("3", modifiers: [.command, .shift])
+
+                    Divider()
+
                     // 文字样式 (inline marks)
                     Button("加粗") { runFormat("bold") }
                         .keyboardShortcut("b", modifiers: [.command])

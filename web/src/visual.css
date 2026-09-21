@@ -339,7 +339,12 @@ body::-webkit-scrollbar-thumb:hover {
   transition: background-color 0.12s ease;
 }
 
-.donemd-bubble__btn:hover {
+.donemd-bubble__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.donemd-bubble__btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.12);
 }
 
