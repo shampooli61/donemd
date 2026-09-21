@@ -406,7 +406,9 @@ body::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.7);
   padding: 2px 6px;
   border-radius: 3px;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
+  border: 1px solid currentColor;
 }
 
 .ProseMirror .donemd-raw-block.ProseMirror-selectednode {
@@ -1993,3 +1995,21 @@ textarea.donemd-slash-input__field { min-height: 64px; }
 /* Mermaid render canvas. */
 :root[data-theme="night"] .donemd-mermaid__render { background: #12171F; border-color: #2a3a52; }
 
+
+/* Document find: transient view state, never serialized. */
+.donemd-find { position: fixed; top: 8px; right: 12px; z-index: 10000; display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--border-color, #999); border-radius: 10px; background: Canvas; color: CanvasText; box-shadow: 0 4px 18px #0002; font: 13px system-ui; max-width: calc(100vw - 24px); box-sizing: border-box; flex-wrap: wrap; }
+.donemd-find[hidden] { display: none; }
+.donemd-find input { min-width: 90px; width: 160px; font: inherit; }
+.donemd-find button { font: inherit; }
+.donemd-find-match { background: #ffc85755; }
+.donemd-find-match.is-current { background: #f1b32899; outline: 1px solid #9b6800; }
+
+.donemd-raw-editor { width: min(680px, 85vw); max-height: 85vh; border: 1px solid #888; border-radius: 12px; padding: 22px; background: Canvas; color: CanvasText; font: 14px system-ui; }
+.donemd-raw-editor::backdrop { background: #0005; }
+.donemd-raw-editor textarea { display: block; box-sizing: border-box; width: 100%; min-height: 240px; margin: 16px 0; font: 14px ui-monospace, monospace; resize: vertical; background: Canvas; color: CanvasText; }
+.donemd-raw-editor button { padding: 6px 14px; margin-right: 10px; }
+
+.donemd-ai-scope { display: block; opacity: .65; font: 11px system-ui; margin-top: 2px; }
+button.donemd-slash__item { width: 100%; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; }
+button.donemd-slash__item.is-active { background: Highlight; color: HighlightText; }
+.donemd-slash:focus { outline: 2px solid Highlight; outline-offset: 2px; }

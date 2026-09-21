@@ -2,6 +2,12 @@ import XCTest
 @testable import donemd
 
 final class FirstSavePromptCoordinatorTests: XCTestCase {
+    func testOnlyActualBodyNormalizationNeedsNotice() {
+        XCTAssertFalse(FirstSavePromptCoordinator.requiresNormalization("# 标题\n\n正文\n"))
+        XCTAssertTrue(FirstSavePromptCoordinator.requiresNormalization("标题\n===\n"))
+        XCTAssertFalse(FirstSavePromptCoordinator.requiresNormalization("---\ncustom: 'value'\n---\n# 标题\n"))
+    }
+
 
     /// Each test gets its own UserDefaults suite so they don't see each
     /// other's writes or pollute the real domain.

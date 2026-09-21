@@ -32,7 +32,8 @@ struct FeishuActionCapsule: View {
             capsuleDivider
             Button("推送") { FeishuPushCommand.run() }
                 .buttonStyle(.plain)
-                .help("推送到飞书")
+                .help(document.bindingState.pushLimitations.isEmpty ? "推送到飞书并核对正文" : document.bindingState.pushLimitations.joined(separator: "；"))
+                .disabled(!document.bindingState.pushLimitations.isEmpty)
 
             capsuleDivider
             Button("解绑", action: unbind)
@@ -56,6 +57,7 @@ struct FeishuActionCapsule: View {
 
     private var statusTooltip: String {
         let tokenSuffix = feishu.docToken.map { "doxc \($0.rawValue)" } ?? "未知"
+        if feishu.verificationExpected != nil { return "已写入，核对未完成" }
         if let pushed = feishu.lastPushedAt {
             return "已绑定飞书 · \(FeishuSyncStatusBar.relativeText(from: pushed))同步 · \(tokenSuffix)"
         } else if feishu.lastPulledRevision != nil {

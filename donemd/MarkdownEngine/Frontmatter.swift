@@ -89,6 +89,8 @@ public struct FeishuFrontmatter: Equatable {
     public var lastPulledRevision: Int?
     public var pullFormatVersion: Int?
     public var lastPushedAt: Date?
+    public var verificationExpected: String? = nil
+    public var pushReadOnlyReason: String? = nil
     public var placeholderBlocks: [PlaceholderBlockRef]
 
     /// Anything under `feishu:` that isn't one of the recognized keys
@@ -120,6 +122,8 @@ public struct FeishuFrontmatter: Equatable {
             && lastPulledRevision == nil
             && pullFormatVersion == nil
             && lastPushedAt == nil
+            && verificationExpected == nil
+            && pushReadOnlyReason == nil
             && placeholderBlocks.isEmpty
             && unknownFields.isEmpty
     }

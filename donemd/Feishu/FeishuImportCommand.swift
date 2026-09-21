@@ -46,7 +46,7 @@ enum FeishuImportCommand {
             presentAlert(
                 title: "URL 不识别",
                 message: """
-                请粘贴飞书文档的 URL（如 https://*.feishu.cn/docx/doxc_…）。当前输入：
+                请粘贴飞书文档的 URL（如 https://你的团队.feishu.cn/docx/文档标识）。当前输入：
 
                 \(urlString.prefix(120))
                 """
@@ -95,7 +95,7 @@ enum FeishuImportCommand {
             presentAlert(
                 title: "暂不支持的 URL 类型",
                 message: """
-                这是一条飞书短链（需要服务端 302 跳转才能解析），本切片暂不实现。请在浏览器里打开短链，跳转完成后从地址栏复制 docx 或 wiki URL（含 doxc_… 或 wiki 节点 token）再粘贴。
+                这是一条飞书短链（需要服务端 302 跳转才能解析），当前暂不支持。请在浏览器里打开短链，跳转完成后从地址栏复制 docx 或 wiki URL再粘贴。
                 """
             )
         case .wiki:
@@ -217,11 +217,11 @@ enum FeishuImportCommand {
     private static func promptForURL() -> String? {
         let alert = NSAlert()
         alert.messageText = "从 URL 导入飞书文档"
-        alert.informativeText = "粘贴飞书文档的 URL（必须含 /docx/ + doxc_ token）："
+        alert.informativeText = "粘贴飞书文档或知识库页面链接："
         alert.addButton(withTitle: "导入")
         alert.addButton(withTitle: "取消")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
-        field.placeholderString = "https://*.feishu.cn/docx/doxc_…"
+        field.placeholderString = "https://你的团队.feishu.cn/docx/文档标识"
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }

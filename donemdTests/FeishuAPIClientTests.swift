@@ -20,6 +20,24 @@ import XCTest
 ///   - block-level payload decoding (v2 Slice 5 ships a thin wire
 ///     stub; full decoding lives in the structural-converter slices)
 final class FeishuAPIClientTests: XCTestCase {
+    func testRejectedStagedWriteNeverDeletesTheOldBody() async throws {
+        APIMockProtocol.responses = [
+            .ok("{\"code\":0,\"data\":{\"items\":[{\"block_id\":\"doc\",\"block_type\":1,\"children\":[\"old\"],\"page\":{\"elements\":[]}}],\"has_more\":false}}"),
+            .ok(metaDocResponse(revisionId: 1)),
+            .raw(status: 400, body: "{\"code\":1770001,\"msg\":\"invalid payload\"}")
+        ]
+        do {
+            try await makeClient(token: "T", backoff: .immediate).pushDocument(documentId: "doc", blocks: FeishuStructuralConverter.toFeishuBlocks("new"))
+            XCTFail("write must fail")
+        } catch {}
+        XCTAssertFalse(APIMockProtocol.recordedRequests.contains { $0.httpMethod == "DELETE" })
+    }
+
+    func testEncodingFailureMakesNoRequests() async throws {
+        do { try await makeClient(token: "T").pushDocument(documentId: "doc", blocks: []); XCTFail("invalid blocks") } catch {}
+        XCTAssertTrue(APIMockProtocol.recordedRequests.isEmpty)
+    }
+
 
     override func tearDown() {
         super.tearDown()
@@ -413,7 +431,7 @@ final class FeishuAPIClientTests: XCTestCase {
 
     // MARK: - pushDocument (blocks delete-then-create orchestration)
 
-    func testPushDocumentDeletesExistingThenPostsDescendant() async throws {
+    func testPushDocumentStagesNewBodyBeforeDeletingExisting() async throws {
         // The page block_id == document_id by Feishu convention; with one
         // existing root child, push must fire pull → meta → batch_delete →
         // descendant in order. (Internal pull discards the revision but
@@ -430,28 +448,30 @@ final class FeishuAPIClientTests: XCTestCase {
             """),
             .ok(metaDocResponse(revisionId: 1)),
             .ok("{\"code\":0}"),
+            .ok("{\"code\":0,\"data\":{\"items\":[{\"block_id\":\"doc_target\",\"block_type\":1,\"children\":[\"bx_old\",\"bx_new\"],\"page\":{\"elements\":[]}},{\"block_id\":\"bx_new\",\"block_type\":3,\"heading1\":{\"elements\":[{\"text_run\":{\"content\":\"Hello\"}}]}}],\"has_more\":false}}"),
+            .ok(metaDocResponse(revisionId: 2)),
             .ok("{\"code\":0}"),
         ]
         let client = makeClient(token: "T", backoff: .immediate)
         let blocks = FeishuStructuralConverter.toFeishuBlocks("# Hello\n")
         try await client.pushDocument(documentId: "doc_target", blocks: blocks)
 
-        XCTAssertEqual(APIMockProtocol.recordedRequests.count, 4,
-            "must call pull blocks → pull meta → batch_delete → descendant in order")
+        XCTAssertEqual(APIMockProtocol.recordedRequests.count, 6,
+            "must call pull → stage → verify → delete old in order")
         XCTAssertEqual(APIMockProtocol.recordedRequests[0].url?.path,
             "/open-apis/docx/v1/documents/doc_target/blocks")
         XCTAssertEqual(APIMockProtocol.recordedRequests[0].httpMethod, "GET")
         XCTAssertEqual(APIMockProtocol.recordedRequests[1].url?.path,
             "/open-apis/docx/v1/documents/doc_target")
         XCTAssertEqual(APIMockProtocol.recordedRequests[1].httpMethod, "GET")
-        XCTAssertEqual(APIMockProtocol.recordedRequests[2].url?.path,
+        XCTAssertEqual(APIMockProtocol.recordedRequests[5].url?.path,
             "/open-apis/docx/v1/documents/doc_target/blocks/doc_target/children/batch_delete")
-        XCTAssertEqual(APIMockProtocol.recordedRequests[2].httpMethod, "DELETE")
-        XCTAssertEqual(APIMockProtocol.recordedRequests[3].url?.path,
+        XCTAssertEqual(APIMockProtocol.recordedRequests[5].httpMethod, "DELETE")
+        XCTAssertEqual(APIMockProtocol.recordedRequests[2].url?.path,
             "/open-apis/docx/v1/documents/doc_target/blocks/doc_target/descendant")
-        XCTAssertEqual(APIMockProtocol.recordedRequests[3].httpMethod, "POST")
+        XCTAssertEqual(APIMockProtocol.recordedRequests[2].httpMethod, "POST")
 
-        let deleteBody = APIMockProtocol.recordedRequests[2].bodyData() ?? Data()
+        let deleteBody = APIMockProtocol.recordedRequests[5].bodyData() ?? Data()
         let deleteParsed = try XCTUnwrap(
             JSONSerialization.jsonObject(with: deleteBody) as? [String: Any]
         )
@@ -459,7 +479,7 @@ final class FeishuAPIClientTests: XCTestCase {
         XCTAssertEqual(deleteParsed["end_index"] as? Int, 1,
             "end_index must equal the existing root child count")
 
-        let descBody = APIMockProtocol.recordedRequests[3].bodyData() ?? Data()
+        let descBody = APIMockProtocol.recordedRequests[2].bodyData() ?? Data()
         let descParsed = try XCTUnwrap(
             JSONSerialization.jsonObject(with: descBody) as? [String: Any]
         )

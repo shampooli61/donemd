@@ -403,42 +403,38 @@ public final class FeishuHTTPAPIClient: FeishuAPIClient {
     }
 
     public func pushDocument(documentId: String, blocks: [FeishuBlock]) async throws {
-        // Blocks-orchestration "delete-then-create": list the existing root
-        // children, range-delete them, then POST the new tree as a single
-        // descendants payload. v2-9a-step1' replaced the original
-        // `raw_content` design (which was GET-only) after real-line iteration.
-        // `pushDocument` only needs the existing block tree to find the
-        // page block + its root children; the revision the pull side cares
-        // about is irrelevant here, so we drop it.
+        // Validate completely before touching the remote document.
+        let body: [String: Any]
+        do { body = try FeishuBlockEncoder.encodeDescendantBody(from: blocks, index: -1) }
+        catch { throw FeishuAPIError.decodeFailed("\(error)") }
         let existing = try await pullDocument(documentId: documentId).blocks
-        guard let page = existing.first(where: {
-            if case .page = $0.payload { return true } else { return false }
-        }) else {
+        guard let page = existing.first(where: { if case .page = $0.payload { return true }; return false }) else {
             throw FeishuAPIError.decodeFailed("pulled document has no page block")
         }
-        let pageBlockId = page.blockId
-        let rootChildIds = page.children ?? []
-
-        if !rootChildIds.isEmpty {
-            try await deleteChildren(
-                documentId: documentId,
-                parentBlockId: pageBlockId,
-                startIndex: 0,
-                endIndex: rootChildIds.count
-            )
+        let oldIds = page.children ?? []
+        let newIds = body["children_id"] as? [String] ?? []
+        // Stage the replacement AFTER the old body. A rejected create leaves
+        // the old content intact. On an uncertain result, never delete it.
+        if !newIds.isEmpty {
+            try await createDescendants(documentId: documentId, parentBlockId: page.blockId, body: body)
         }
-
-        let body: [String: Any]
-        do {
-            body = try FeishuBlockEncoder.encodeDescendantBody(from: blocks, index: -1)
-        } catch {
-            throw FeishuAPIError.decodeFailed("\(error)")
+        if !oldIds.isEmpty {
+            let staged = try await pullDocument(documentId: documentId).blocks
+            let actual = staged.first { if case .page = $0.payload { return true }; return false }?.children ?? []
+            guard actual.count == oldIds.count + newIds.count,
+                  Array(actual.prefix(oldIds.count)) == oldIds else {
+                throw FeishuAPIError.decodeFailed("新正文未完整核对，旧正文未删除。请打开飞书检查；如出现重复内容，可在飞书版本历史恢复推送前版本。不要拉取覆盖本地。")
+            }
+            var replacement = staged
+            if let pageIndex = replacement.firstIndex(where: { $0.blockId == page.blockId }) {
+                replacement[pageIndex].children = Array(actual.suffix(newIds.count))
+            }
+            guard FeishuStructuralConverter.toMarkdown(replacement) == FeishuStructuralConverter.toMarkdown(blocks) else {
+                throw FeishuAPIError.decodeFailed("新正文内容核对不一致，旧正文未删除。请在飞书检查重复或缺失内容，必要时使用飞书版本历史恢复。")
+            }
+            try await deleteChildren(documentId: documentId, parentBlockId: page.blockId,
+                                     startIndex: 0, endIndex: oldIds.count)
         }
-        try await createDescendants(
-            documentId: documentId,
-            parentBlockId: pageBlockId,
-            body: body
-        )
     }
 
     public func createDocument(title: String, parentToken: String?) async throws -> String {

@@ -175,6 +175,8 @@ export function runFormatCommand(
   cmd: string,
   insertLink: (editor: Editor) => void
 ): void {
+  if (cmd === 'undo') { editor.chain().focus().undo().run(); return; }
+  if (cmd === 'redo') { editor.chain().focus().redo().run(); return; }
   if (cmd === 'link') {
     insertLink(editor);
     return;
@@ -220,6 +222,13 @@ export interface AICommandGroup {
  *  Exported so the ⌘/ panel (slash-menu.ts) can offer the SAME transform set
  *  when there's a selection — the bubble's "AI ▾" is the mouse path, ⌘/ is the
  *  keyboard path, both onto one command catalog (#69 双路径冗余). */
+export function aiScopeHint(kind: string): string {
+  if (kind.startsWith('translate')) return '仅发送选中文字';
+  if (kind === 'continueWriting') return '参考整篇文档续写';
+  if (['writeOutline', 'expandTopic', 'freePrompt'].includes(kind)) return '仅发送你输入的要求';
+  return '发送选中文字及设置中指定的前后文';
+}
+
 export const AI_GROUPS: AICommandGroup[] = [
   {
     title: '改写',
@@ -343,6 +352,9 @@ export function createBubbleMenu(): BubbleHandle {
       item.type = 'button';
       item.className = 'donemd-bubble__ai-item';
       item.textContent = cmd.label;
+      const scope = document.createElement('small'); scope.className = 'donemd-ai-scope';
+      scope.textContent = aiScopeHint(cmd.kind); item.append(scope);
+      item.setAttribute('aria-label', `${cmd.label}，${aiScopeHint(cmd.kind)}`);
       item.dataset.kind = cmd.kind;
       if (cmd.prompt) item.dataset.prompt = cmd.prompt;
       item.addEventListener('mousedown', (e) => e.preventDefault());

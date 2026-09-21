@@ -21,7 +21,7 @@ import AppKit
 enum FeishuPushCommand {
 
     @MainActor
-    static func run() {
+    static func run(verifyOnly: Bool = false) {
         guard let document = NSDocumentController.shared.currentDocument as? DonemdDocument else {
             presentAlert(
                 title: "没有可推送的文档",
@@ -70,6 +70,33 @@ enum FeishuPushCommand {
                 try await oauth.login().accessToken
             }
         )
+
+        if verifyOnly {
+            guard let feishu = document.parsedDocument.frontmatter.feishu,
+                  let token = feishu.docToken,
+                  let expected = feishu.verificationExpected else {
+                presentAlert(title: "没有待核对的推送", message: "上次推送已完成核对，或尚未推送。")
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let remote = try await api.pullDocument(documentId: token.rawValue)
+                    guard FeishuPushCoordinator.contentDigest(remote.blocks) == expected else {
+                        presentAlert(title: "正文核对不一致", message: "飞书正文与上次提交的内容不同。请打开飞书查看，必要时在版本历史恢复；本地内容仍保留。")
+                        return
+                    }
+                    var frontmatter = document.parsedDocument.frontmatter
+                    frontmatter.feishu?.verificationExpected = nil
+                    frontmatter.feishu?.lastPushedAt = Date()
+                    document.applyUpdatedFrontmatterAndSave(frontmatter) { error in
+                        presentAlert(title: error == nil ? "上次推送已核对" : "核对通过，状态尚未保存", message: error == nil ? "飞书正文与上次提交的内容一致。此次没有写入飞书。" : "请按 Cmd+S 保存核对结果。")
+                    }
+                } catch {
+                    presentAlert(title: "暂时无法核对", message: "请检查网络和飞书登录状态后重试。此次没有写入飞书。")
+                }
+            }
+            return
+        }
 
         let imageStage = FeishuImageUploadStage(
             api: api,
@@ -139,18 +166,19 @@ enum FeishuPushCommand {
             document.applyUpdatedFrontmatterAndSave(
                 result.updatedDocument.frontmatter
             ) { persistError in
-                let alertTitle = wasNewDoc ? "已创建飞书文档" : "已同步到飞书"
+                let alertTitle = result.verificationPending ? "已写入，核对未完成" : (wasNewDoc ? "已创建并核对飞书文档" : "已同步并核对飞书正文")
                 var lines: [String] = []
+                if let message = result.verificationMessage { lines.append(message) }
                 if wasNewDoc {
                     lines.append("飞书侧已创建新文档：\(title)")
                 } else {
-                    lines.append("文档「\(title)」的正文已更新到飞书。")
+                    lines.append(result.verificationPending ? "文档「\(title)」的写入请求已完成，正文完整性仍待核对。" : "文档「\(title)」的正文已更新到飞书。")
                     // #57 step4 title sync re-enabled. If the PATCH
                     // succeeded, no extra line. If it failed, surface
                     // a soft warning so the user knows the title on
                     // Feishu is stale.
                     if let failure = result.titleSyncFailure {
-                        lines.append("ℹ️ 文档标题同步飞书时被拒（\(humanReadable(failure))）。正文已成功同步——飞书侧的标题保持原样。")
+                        lines.append("ℹ️ 文档标题同步飞书时被拒（\(humanReadable(failure))）；飞书侧的标题保持原样。")
                     }
                 }
                 if !imageLine.isEmpty {
@@ -211,6 +239,8 @@ enum FeishuPushCommand {
                     }
                     presentAlert(title: "同步未完成", message: msg)
                 }
+            case .unsupportedContent(let types):
+                presentAlert(title: "为保护内容，此次未推送", message: "文档包含暂不能保真同步的内容：\(types.joined(separator: "、"))。本地内容已保留，飞书未修改。可在副本中将这些内容改为普通文字或代码块，再推送；原文块可点击「编辑原文」查看。")
             case .apiFailed(let underlying):
                 presentAlert(
                     title: "同步失败",

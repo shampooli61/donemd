@@ -1,3 +1,4 @@
+import { createDocumentSearch } from './document-search';
 import { Editor, Extension } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Heading from '@tiptap/extension-heading';
@@ -402,8 +403,12 @@ on('insertTable', () => {
 // runFormatCommand — one action map, so menu and floater never drift). The
 // `link` cmd routes through this file's interactive link prompt. Marks/blocks
 // toggle on the current selection or block, exactly like clicking the floater.
+const documentSearch = createDocumentSearch(editor, ordinal => send('foldToggled', { ordinal, collapse: false }));
+
 on('formatCommand', (payload) => {
   const cmd = (payload as { cmd?: string })?.cmd;
+  if (cmd === 'find') { documentSearch.open(); return; }
+  if (cmd === 'showAI') { slash.panel.show(editor.view); return; }
   if (typeof cmd === 'string') {
     runFormatCommand(editor, cmd, insertLinkInteractive);
   }
@@ -1370,4 +1375,7 @@ editor.on('update', () => {
 
 // Outbound: signal Swift that the editor is mounted and ready to receive
 // the document. Swift's bridge handler responds with `loadDocument`.
+editor.on('transaction', () => {
+  send('historyChanged', { canUndo: editor.can().undo(), canRedo: editor.can().redo() });
+});
 send('editorReady');

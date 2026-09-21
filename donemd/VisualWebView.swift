@@ -177,6 +177,16 @@ struct VisualWebView: NSViewRepresentable {
             //      Markdown 源 pane so the right side mirrors edits in
             //      real time. JS already coalesces 'update' events to
             //      one rAF tick, so this fires at most ~60Hz.
+            bridge.register(type: "historyChanged") { [weak self] envelope in
+                guard let self, case .object(let values) = envelope.payload,
+                      case .bool(let undo)? = values["canUndo"],
+                      case .bool(let redo)? = values["canRedo"] else { return }
+                DispatchQueue.main.async {
+                    self.document.editorCanUndo = undo
+                    self.document.editorCanRedo = redo
+                    EditorMenuState.shared.refresh()
+                }
+            }
             bridge.register(type: "documentChanged") { [weak self] _ in
                 guard let self else { return }
                 DispatchQueue.main.async {

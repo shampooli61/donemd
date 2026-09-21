@@ -15,6 +15,14 @@ public final class FirstSavePromptCoordinator {
     /// global domain.
     public static let shared = FirstSavePromptCoordinator()
 
+    /// Compare the on-disk body with its canonical form, independently of
+    /// user edits and frontmatter metadata changes in the current session.
+    static func requiresNormalization(_ source: String) -> Bool {
+        let body = FrontmatterEngine.parse(source).body
+        return MarkdownEngine.serialize(document: MarkdownEngine.parse(markdown: body)) != body
+    }
+
+
     private let defaults: UserDefaults
     private let defaultsKey = "donemd.firstSavePromptedFiles"
 

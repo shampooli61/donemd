@@ -10,9 +10,13 @@ import AppKit
 /// an AI thing" without being nagged; a markdown-only user can ignore it.
 struct AIStatusBadge: View {
     @ObservedObject var manager: AIProviderManager
+    let document: DonemdDocument?
 
     var body: some View {
-        Button(action: openSettings) {
+        Menu {
+            Button("AI 操作…") { document?.runFormatCommand("showAI") }
+            Button("AI 设置…", action: openSettings)
+        } label: {
             HStack(spacing: 4) {
                 Image(systemName: "sparkles")
                     .font(.caption2)
@@ -30,7 +34,7 @@ struct AIStatusBadge: View {
             .foregroundStyle(.primary)
         }
         .buttonStyle(.plain)
-        .help("AI 助手 — 点击打开 设置 → AI Provider")
+        .help("AI 操作与设置；选区决定可用操作，面板中显示处理范围")
     }
 
     private var isConfigured: Bool {

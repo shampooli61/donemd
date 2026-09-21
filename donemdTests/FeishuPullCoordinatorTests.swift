@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import donemd
 
 /// v2 Slice 8 / "v2-9b" step1 (#49) — happy-path PullCoordinator.
@@ -19,6 +20,17 @@ import XCTest
 ///   - placeholder index frontmatter sync
 ///   - revision conflict detection — that's #51
 final class FeishuPullCoordinatorTests: XCTestCase {
+    func testImportKeepsPushRestrictionWhenGridMediaFlattensToLocalRoot() async throws {
+        let api = MockFeishuAPIClient()
+        api.pullDocumentResponse = [
+            .init(blockId: "doc", children: ["grid"], payload: .page(.init())),
+            .init(blockId: "grid", children: ["movie"], payload: .layoutContainer(blockType: 24)),
+            .init(blockId: "movie", payload: .placeholder(.init(subtype: .video, title: "视频", url: ""))),
+        ]
+        let result = try await FeishuPullCoordinator(apiClient: api).pull(token: DocToken("doc"))
+        XCTAssertNotNil(result.updatedDocument.frontmatter.feishu?.pushReadOnlyReason)
+    }
+
     func testPullStampsFormatVersionEvenWhenRemoteRevisionIsUnchanged() async throws {
         let api = MockFeishuAPIClient()
         api.pullDocumentResponse = pageWithParagraph(pageId: "doc", text: "restored content")
@@ -507,5 +519,31 @@ final class FeishuPullCoordinatorTests: XCTestCase {
             collected.append(flattenText(child))
         }
         return collected.joined(separator: "\n")
+    }
+}
+
+
+final class PullRecoveryHistoryTests: XCTestCase {
+    func testLegacyBackupRemainsAvailableAfterUpgrade() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".md")
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Done.md/pull-backups")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let key = SHA256.hash(data: Data(url.standardizedFileURL.path.utf8)).map { String(format: "%02x", $0) }.joined()
+        struct Meta: Encodable { let originalPath: String; let capturedAt: Date; let blockCount: Int }
+        try JSONEncoder().encode(Meta(originalPath: url.path, capturedAt: Date(), blockCount: 1)).write(to: dir.appendingPathComponent(key + ".json"))
+        try Data("legacy text".utf8).write(to: dir.appendingPathComponent(key + ".md"))
+        XCTAssertEqual(FeishuPullSnapshotStore.history(for: url).map(\.markdown), ["legacy text"])
+        XCTAssertEqual(FeishuPullSnapshotStore.history(for: url).count, 1)
+        FeishuPullSnapshotStore.clear(for: url)
+    }
+    func testRepeatedPullsKeepEarlierVersionsBeyondTenMinutes() {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".md")
+        let now = Date()
+        XCTAssertTrue(FeishuPullSnapshotStore.save(markdown: "first", for: url, blockCount: 1, now: now.addingTimeInterval(-86400)))
+        XCTAssertTrue(FeishuPullSnapshotStore.save(markdown: "second", for: url, blockCount: 1, now: now))
+        XCTAssertEqual(FeishuPullSnapshotStore.latest(for: url)?.markdown, "second")
+        FeishuPullSnapshotStore.clear(for: url)
+        XCTAssertEqual(FeishuPullSnapshotStore.latest(for: url)?.markdown, "first")
+        FeishuPullSnapshotStore.clear(for: url)
     }
 }

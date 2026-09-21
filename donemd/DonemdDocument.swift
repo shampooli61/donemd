@@ -8,6 +8,9 @@ import Combine
 /// resulting Tiptap JSON to the embedded WebView once it signals editorReady.
 /// Save flow is added in Slice 3 (#7); first-save prompt in Slice 7 (#14).
 final class DonemdDocument: NSDocument {
+    var editorCanUndo = false
+    var editorCanRedo = false
+
     /// The parsed document — body (Tiptap JSON) plus optional YAML
     /// frontmatter. Updated by `read(from:ofType:)` and read by
     /// `VisualWebView` when the JS editor signals it is ready. Only the
@@ -172,6 +175,7 @@ final class DonemdDocument: NSDocument {
     }
 
     public final class BindingStateContainer: ObservableObject {
+        @Published public var pushLimitations: [String] = []
         @Published public var feishu: FeishuFrontmatter? = nil
         /// Whether the document currently carries a frontmatter fence at all
         /// (user fields and/or Done.md-managed `feishu:` metadata). Drives the
@@ -183,14 +187,17 @@ final class DonemdDocument: NSDocument {
         /// hops to main if not already there — `@ObservedObject`
         /// receivers expect main-thread publishes, and NSDocument's
         /// `read(from:)` can run off-main on initial open.
-        public func update(from frontmatter: Frontmatter) {
+        public func update(from frontmatter: Frontmatter, body: TiptapNode) {
+            let limitations = FeishuPushCoordinator.pushLimitations(.init(frontmatter: frontmatter, body: body))
             let feishuSnapshot = frontmatter.feishu
             let hasFence = frontmatter.hasFence
             if Thread.isMainThread {
+                self.pushLimitations = limitations
                 self.feishu = feishuSnapshot
                 self.hasFrontmatter = hasFence
             } else {
                 DispatchQueue.main.async { [weak self] in
+                    self?.pushLimitations = limitations
                     self?.feishu = feishuSnapshot
                     self?.hasFrontmatter = hasFence
                 }
@@ -380,6 +387,7 @@ final class DonemdDocument: NSDocument {
             switch result {
             case .success(let body):
                 self.parsedDocument.body = body
+                self.bindingState.update(from: self.parsedDocument.frontmatter, body: body)
             case .failure(let error):
                 debugLog("[sync] Visual fetch failed; using last-known state: \(error)")
             }
@@ -523,7 +531,7 @@ final class DonemdDocument: NSDocument {
         // #53 status bar — publish the binding state so the SwiftUI
         // status bar shows up immediately on file open, not only after
         // the first push/pull.
-        bindingState.update(from: parsedDocument.frontmatter)
+        bindingState.update(from: parsedDocument.frontmatter, body: parsedDocument.body)
         // Seed the centered-title chrome on open (updateChangeCount won't
         // fire for a clean open).
         titleState.update(title: displayName, isEdited: isDocumentEdited)
@@ -638,7 +646,8 @@ final class DonemdDocument: NSDocument {
             // skip the dialog.
             let needsFirstSavePrompt =
                 saveOperation == .saveOperation &&
-                FirstSavePromptCoordinator.shared.shouldPrompt(forFileAt: url)
+                FirstSavePromptCoordinator.shared.shouldPrompt(forFileAt: url) &&
+                ((try? String(contentsOf: url, encoding: .utf8)).map(FirstSavePromptCoordinator.requiresNormalization) ?? true)
 
             if needsFirstSavePrompt {
                 self.runFirstSavePrompt(
@@ -819,7 +828,7 @@ final class DonemdDocument: NSDocument {
         completion: @escaping (FrontmatterPersistError?) -> Void
     ) {
         parsedDocument.frontmatter = frontmatter
-        bindingState.update(from: frontmatter)
+        bindingState.update(from: frontmatter, body: parsedDocument.body)
         updateChangeCount(.changeDone)
         pushCurrentMarkdownToSource()
 
@@ -876,7 +885,7 @@ final class DonemdDocument: NSDocument {
     /// before the disk write.
     func applyUpdatedDocumentInMemory(_ updated: MarkdownEngine.ParsedDocument) {
         parsedDocument = updated
-        bindingState.update(from: updated.frontmatter)
+        bindingState.update(from: updated.frontmatter, body: updated.body)
         // #58 URL import fills a fresh untitled window with a full document
         // (content + headings), so it's a "content document" for the 大纲
         // sticky-default rule, not a blank new page — restore the remembered
@@ -896,7 +905,7 @@ final class DonemdDocument: NSDocument {
         completion: @escaping (FrontmatterPersistError?) -> Void
     ) {
         parsedDocument = updated
-        bindingState.update(from: updated.frontmatter)
+        bindingState.update(from: updated.frontmatter, body: updated.body)
         updateChangeCount(.changeDone)
         reloadAllPanesFromCurrentDocument()
 
@@ -919,20 +928,29 @@ final class DonemdDocument: NSDocument {
     /// Read an image file from disk, hand it to AssetsManager, and tell the
     /// attached WebView to insert the image at the current selection.
     /// Used by the `Cmd+Shift+I` flow.
+    private func presentAssetImportError(_ kind: String, error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "\(kind)未插入"
+        alert.informativeText = "\(error.localizedDescription)\n\n请确认文件仍可访问、磁盘空间充足，再从「格式」菜单中的图片或视频入口重试。正文没有新增损坏的引用。"
+        alert.alertStyle = .warning
+        if let window = windowControllers.first?.window { alert.beginSheetModal(for: window) }
+        else { alert.runModal() }
+    }
+
     func insertImage(from sourceURL: URL) {
         let mime = AssetURLSchemeHandler.mimeType(forFilename: sourceURL.lastPathComponent)
         let bytes: Data
         do {
             bytes = try Data(contentsOf: sourceURL)
         } catch {
-            debugLog("[insert-image] failed to read \(sourceURL.path): \(error)")
+            presentAssetImportError("图片", error: error)
             return
         }
         let imported: ImportedImage
         do {
             imported = try assetsManager.importImage(data: bytes, mimeType: mime)
         } catch {
-            debugLog("[insert-image] AssetsManager failed: \(error)")
+            presentAssetImportError("图片", error: error)
             return
         }
         visualCoordinator?.send(
@@ -952,14 +970,14 @@ final class DonemdDocument: NSDocument {
         do {
             bytes = try Data(contentsOf: sourceURL)
         } catch {
-            debugLog("[insert-video] failed to read \(sourceURL.path): \(error)")
+            presentAssetImportError("视频", error: error)
             return
         }
         let imported: ImportedImage
         do {
             imported = try assetsManager.importVideo(data: bytes, mimeType: mime)
         } catch {
-            debugLog("[insert-video] AssetsManager failed: \(error)")
+            presentAssetImportError("视频", error: error)
             return
         }
         visualCoordinator?.send(
@@ -1226,7 +1244,7 @@ private final class DocumentToolbarDelegate: NSObject, NSToolbarDelegate {
             return item
         case Self.aiItem:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.view = NSHostingView(rootView: AIStatusBadge(manager: AppDelegate.aiProviderManager))
+            item.view = NSHostingView(rootView: AIStatusBadge(manager: AppDelegate.aiProviderManager, document: document))
             item.visibilityPriority = .high
             return item
         default:
@@ -1291,6 +1309,7 @@ private struct DonemdDocumentRootView: View {
     /// divider) instead of HSplitView because HSplitView seeds its divider from
     /// child ideal-widths, which a bare WKWebView representable doesn't report —
     /// so it always fell back to a 1:1 split regardless of `idealWidth`.
+    @AppStorage("donemd.sourceVisible") private var sourceVisible = true
     @AppStorage("donemd.sourcePaneWidth") private var sourcePaneWidth = 340.0
 
     /// True while the user is actively dragging the pane divider. Keeps the
@@ -1346,6 +1365,7 @@ private struct DonemdDocumentRootView: View {
                     VisualWebView(document: document, webDataTheme: writingTheme.webDataThemeValue)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+                    if sourceVisible {
                     // Draggable divider — replaces HSplitView's built-in handle.
                     // A real 8pt-wide hit target in the HStack flow (not a 1pt
                     // Divider's overlay, whose wider hit area got clipped to the
@@ -1406,6 +1426,23 @@ private struct DonemdDocumentRootView: View {
                     // shows through and blurs the Visual pane / tinted canvas
                     // behind it — a distinct, recessed "source" surface. (#75)
                     .background(.ultraThinMaterial)
+                    }
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !bindingState.pushLimitations.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "info.circle")
+                        Text("暂不能推送：" + bindingState.pushLimitations.joined(separator: "；"))
+                            .font(.caption).textSelection(.enabled)
+                        Spacer(minLength: 0)
+                    }.padding(8).background(.regularMaterial)
+                } else if bindingState.feishu?.verificationExpected != nil {
+                    HStack {
+                        Text("上次推送已写入，核对未完成").font(.caption)
+                        Button("重新核对") { FeishuPushCommand.run(verifyOnly: true) }
+                        Spacer()
+                    }.padding(8).background(.regularMaterial)
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -1482,6 +1519,7 @@ private struct MarkdownSourceTopBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            Text("Markdown 源 · 只读").font(.caption).foregroundStyle(.secondary)
             if hasFrontmatter {
                 Button {
                     showFrontmatter.toggle()

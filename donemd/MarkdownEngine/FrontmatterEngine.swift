@@ -295,6 +295,8 @@ public enum FrontmatterEngine {
                 }
             case "pull_format_version":
                 result.pullFormatVersion = valueNode.int
+            case "verification_expected": result.verificationExpected = valueNode.string
+            case "push_read_only_reason": result.pushReadOnlyReason = valueNode.string
             case "last_pushed_at":
                 if let s = valueNode.string,
                    let date = parseISO8601(s) {
@@ -400,6 +402,8 @@ public enum FrontmatterEngine {
         if let date = feishu.lastPushedAt {
             s += "  last_pushed_at: \(yamlEmitScalar(formatISO8601(date)))\n"
         }
+        if let expected = feishu.verificationExpected { s += "  verification_expected: \(yamlEmitScalar(expected))\n" }
+        if let reason = feishu.pushReadOnlyReason { s += "  push_read_only_reason: \(yamlEmitScalar(reason))\n" }
         if !feishu.placeholderBlocks.isEmpty {
             s += "  placeholder_blocks:\n"
             for block in feishu.placeholderBlocks {
