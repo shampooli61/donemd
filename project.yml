@@ -18,7 +18,7 @@ settings:
     SWIFT_VERSION: "5.9"
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "4"
+    CURRENT_PROJECT_VERSION: "5"
 
 packages:
   swift-markdown:
@@ -100,8 +100,8 @@ targets:
         # Sparkle auto-update. SUFeedURL points at the EdDSA-signed appcast on
         # GitHub Pages; SUPublicEDKey is the Ed25519 public half (private key
         # kept offline, used by build-release.sh to sign each update). The key
-        # below is a PLACEHOLDER — replaced by the real public key that
-        # `generate_keys` emits (see docs/notes/sparkle-release.md). Auto-update
+        # below matches the existing signing key in the maintainer's keychain.
+        # Keep it stable so existing installations can verify updates. Auto-update
         # only fully works on Developer ID-signed + notarized builds.
         SUFeedURL: https://shampooli61.github.io/donemd/appcast.xml
         SUPublicEDKey: I598yoXx7vAaVUSCCQSCiU24F2DpCaiGrSp07lw7eds=

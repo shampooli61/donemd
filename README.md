@@ -138,16 +138,13 @@ https://github.com/user-attachments/assets/22e79c48-d9c7-476a-9af8-1c6561a1447c
 
 ## 安装（Install）
 
-> ⚠️ **当前是未公证的预览版（preview）**——功能完整，但签名 + Apple 公证的正式版还在路上，所以第一次打开需要手动放行一次（下面第 3 步）。
+正式版已完成 Developer ID 签名和 Apple 公证，支持 Intel 与 Apple Silicon。
 
-1. 到 [Releases](https://github.com/shampooli61/donemd/releases) 下载最新的预览版 `Done.md-x.y.z.dmg`
-2. 双击 `.dmg`，把 `donemd.app` 拖进「应用程序」
-3. **第一次打开**（只需一次，之后跟普通应用一样）——三选一：
-   - **命令行最省事**：终端运行 `xattr -dr com.apple.quarantine /Applications/donemd.app`，之后双击即开
-   - **系统设置**（macOS 15 / 26）：双击 → 弹「无法验证」点「完成」→ 打开「系统设置 → 隐私与安全性」→ 滚到底点「仍要打开」→ 再确认一次
-   - **右键打开**（macOS 13 / 14）：在「应用程序」里右键 `donemd.app` →「打开」→ 再点「打开」按钮
+1. 到 [最新正式版](https://github.com/shampooli61/donemd/releases/latest) 下载 `Done.md-x.y.z.dmg`。
+2. 双击 `.dmg`，把「马上做完.app」拖进「应用程序」。
+3. 从「应用程序」打开「马上做完」。首次打开如出现 macOS 下载来源确认，点击「打开」即可。
 
-> 正式的签名公证版发布后，首次打开就不再需要这一步。
+后续在「马上做完」菜单选择「检查更新…」，按提示安装更新。已安装预览版的用户也可以从这里升级到正式版；若旧版更新失败，可下载最新 DMG 覆盖安装。
 
 ## 从源码构建（Build from source）
 

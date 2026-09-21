@@ -1,5 +1,31 @@
 # Done.md — 本地构建
 
+## 正式签名与自动更新
+
+已在 Xcode 登录付费开发者团队、并安装 Developer ID Application 证书时，
+可直接复用 Xcode 账号提交 Apple 公证，无需另外提供 App 专用密码：
+
+```bash
+security find-identity -v -p codesigning
+export DEVELOPMENT_TEAM="你的 Team ID"
+export DEVELOPER_ID_APP="Developer ID Application 证书的 SHA-1"
+bash scripts/build-release-xcode.sh
+# 若 Apple 仍在处理，稍后继续，不重复构建或上传：
+bash scripts/build-release-xcode.sh --resume
+```
+
+每次发布先递增 `project.yml` 的 `CURRENT_PROJECT_VERSION`；已有正式版本也需
+递增 `MARKETING_VERSION`。保留原有 `SUPublicEDKey` 和 `SUFeedURL`。
+脚本校验公证票据、Gatekeeper 和 Sparkle 公钥，再生成 ZIP、DMG、校验和与更新清单。
+`dist/` 保留本次归档，`--resume` 会核对归档版本，避免把旧包误标为新版本。
+
+上传 ZIP、DMG、校验和到对应的 `v<版本>` GitHub Release；将
+`dist/releases/appcast.xml` 部署到 `https://shampooli61.github.io/donemd/appcast.xml`。
+更新清单上线前必须确认其中的 ZIP 下载链接有效。证书私钥、Apple 凭据和
+Sparkle 私钥始终保留在本机钥匙串，不提交到仓库。
+
+原 `scripts/build-release.sh --release` 使用 `notarytool` 钥匙串凭据的路径仍可使用。
+
 ## 前提条件
 
 - macOS 13+（Ventura 或更新）

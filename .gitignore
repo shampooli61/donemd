@@ -1,0 +1,26 @@
+# Generated projects, dependencies and release artifacts
+*.xcodeproj/
+donemd/Info.plist
+Resources/Web/*
+!Resources/Web/.gitkeep
+node_modules/
+dist/
+build/
+DerivedData/
+*.xcarchive/
+*.xcresult/
+*.log
+.DS_Store
+
+# Local credentials must never be committed
+.env
+.env.*
+secrets/
+*.p12
+*.pem
+*.key
+donemd-feishu-config.plist
+**/feishu-config.plist
+
+# Private development fixtures are not part of the public snapshot
+samples/
