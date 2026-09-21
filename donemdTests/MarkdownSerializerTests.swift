@@ -4,6 +4,37 @@ import XCTest
 /// Direct serialization tests — given a hand-built Tiptap doc, assert the
 /// exact Markdown bytes that come out.
 final class MarkdownSerializerTests: XCTestCase {
+    func testAdjacentStrikeRunsDoNotLeakTildes() {
+        let strike = TiptapMark(type: "strike")
+        let input = doc(paragraph(text("旧", strike), text("说明", strike), text(" ", strike), text("后续", strike)))
+        let markdown = MarkdownEngine.serialize(document: input)
+        let reopened = MarkdownEngine.parse(markdown: markdown)
+        let runs = reopened.content?.first?.content ?? []
+        XCTAssertEqual(runs.compactMap(\.text).joined(), "旧说明 后续")
+        XCTAssertTrue(runs.allSatisfy { $0.marks?.contains(strike) == true })
+        XCTAssertEqual(MarkdownEngine.serialize(document: reopened), markdown)
+    }
+    func testCJKPunctuationBoldNextToUnmarkedTextSurvivesReopen() {
+        let input = doc(paragraph(text("【快捷操作】", bold()), text("后续内容")))
+        let markdown = MarkdownEngine.serialize(document: input)
+        let reopened = MarkdownEngine.parse(markdown: markdown)
+        let runs = reopened.content?.first?.content ?? []
+        XCTAssertEqual(runs.compactMap(\.text).joined(), "【快捷操作】后续内容")
+        XCTAssertEqual(runs.filter { $0.marks?.contains(where: { $0.type == "bold" }) == true }
+            .compactMap(\.text).joined(), "【快捷操作】")
+        XCTAssertEqual(MarkdownEngine.serialize(document: reopened), markdown)
+    }
+    func testBoldWithSurroundingWhitespaceSurvivesSaveAndReopen() {
+        let input = doc(paragraph(text("前缀"), text(" 【快捷操作】 ", bold()), text("后续内容")))
+        let markdown = MarkdownEngine.serialize(document: input)
+        let reopened = MarkdownEngine.parse(markdown: markdown)
+        let runs = reopened.content?.first?.content ?? []
+        XCTAssertEqual(runs.compactMap(\.text).joined(), "前缀 【快捷操作】 后续内容")
+        XCTAssertEqual(runs.filter { $0.marks?.contains(where: { $0.type == "bold" }) == true }
+            .compactMap(\.text).joined(), "【快捷操作】")
+        XCTAssertEqual(MarkdownEngine.serialize(document: reopened), markdown)
+    }
+
     func testSerializeCases() {
         for testCase in cases {
             let actual = MarkdownEngine.serialize(document: testCase.input)

@@ -215,36 +215,87 @@ struct MarkdownSerializer {
         return lines.joined(separator: "\n")
     }
 
-    /// Render a tableCell / tableHeader's first block as a single inline
-    /// string. Table cells allow block content (`block+`), so the first block
-    /// may be a paragraph OR a heading (a header cell styled with a heading
-    /// level), a blockquote, etc. GFM tables can't express block structure —
-    /// collapse whatever's there to inline text. We must read the block's
-    /// inline `content`, not `node.text` (block nodes carry their text in
-    /// `content`, so `node.text` is nil — the old paragraph-only path dropped
-    /// header text entirely once a header cell held a heading).
+    /// GFM stores cell paragraphs on one line. <br> separates paragraphs;
+    /// images retain their Markdown syntax and opaque Feishu media retain
+    /// the existing magic-comment fields in a table-safe one-line form.
     private func cellInline(_ cell: TiptapNode) -> String {
-        guard let blocks = cell.content, let first = blocks.first else { return "" }
-        // First block's inline children, whatever the block type (paragraph,
-        // heading, …). Falls back to any nested text if it has no inline model.
-        if let inline = first.content, !inline.isEmpty {
-            return serializeInlineChildren(inline)
-        }
-        return collectText(first)
+        (cell.content ?? []).flatMap(cellFragments).joined(separator: "<br>")
     }
 
-    /// Depth-first concatenation of every descendant `text` — last-resort
-    /// fallback for a cell block with no direct inline content.
-    private func collectText(_ node: TiptapNode) -> String {
-        var out = node.text ?? ""
-        for child in node.content ?? [] { out += collectText(child) }
-        return out
+    private func cellFragments(_ node: TiptapNode) -> [String] {
+        switch node.type {
+        case "paragraph", "heading":
+            return [tableSafe(serializeInlineChildren(node.content ?? []))]
+        case "image":
+            return [tableSafe(serializeInline(node))]
+        case "feishu_placeholder_block":
+            let raw = serializeBlock(node) ?? ""
+            return [raw.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "|", with: "&#124;")
+                .replacingOccurrences(of: "\n", with: "&#10;")]
+        case "codeBlock":
+            return [tableSafe(serializeInlineChildren(node.content ?? []))]
+        case "horizontalRule":
+            return ["—"]
+        default:
+            return (node.content ?? []).flatMap(cellFragments)
+        }
+    }
+
+    private func tableSafe(_ text: String) -> String {
+        text.replacingOccurrences(of: "|", with: "\\|")
+            .replacingOccurrences(of: "\\\n", with: "<br>")
+            .replacingOccurrences(of: "\n", with: "<br>")
     }
 
     // MARK: Inline
 
-    private func serializeInlineChildren(_ nodes: [TiptapNode]) -> String {
-        nodes.map { serializeInline($0) }.joined()
+    private func serializeInlineChildren(_ children: [TiptapNode]) -> String {
+        // Feishu splits one styled span into many runs. Reopening must not
+        // expose adjacent closing/opening markers as literal **** or ~~~~.
+        var nodes: [TiptapNode] = []
+        for child in children {
+            if child.type == "text", let last = nodes.last, last.type == "text",
+               (last.marks ?? []) == (child.marks ?? []) {
+                nodes[nodes.count - 1].text = (last.text ?? "") + (child.text ?? "")
+            } else {
+                nodes.append(child)
+            }
+        }
+        var parts = nodes.map { serializeInline($0) }
+        // CommonMark treats CJK brackets as punctuation. At an emphasis
+        // boundary such as **【标题】**正文, encode the neighbouring letter
+        // as an entity so the delimiters flank punctuation in the source.
+        // Parsing restores the exact character: no added spaces/ZWSPs.
+        for i in nodes.indices {
+            let node = nodes[i]
+            guard node.type == "text",
+                  node.marks?.contains(where: { ["bold", "italic", "strike"].contains($0.type) }) == true,
+                  node.marks?.contains(where: { $0.type == "code" || $0.type == "link" }) != true else { continue }
+            if let first = node.text?.first, isPunctuation(first), i > 0,
+               let previous = parts[i - 1].last, isWordCharacter(previous) {
+                parts[i - 1] = String(parts[i - 1].dropLast()) + entity(previous)
+            }
+            if let last = node.text?.last, isPunctuation(last), i + 1 < parts.count,
+               let next = parts[i + 1].first, isWordCharacter(next) {
+                parts[i + 1] = entity(next) + String(parts[i + 1].dropFirst())
+            }
+        }
+        return parts.joined()
+    }
+
+    private func isPunctuation(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy {
+            CharacterSet.punctuationCharacters.contains($0) || CharacterSet.symbols.contains($0)
+        }
+    }
+
+    private func isWordCharacter(_ character: Character) -> Bool {
+        !character.isWhitespace && !isPunctuation(character)
+    }
+
+    private func entity(_ character: Character) -> String {
+        character.unicodeScalars.map { "&#\($0.value);" }.joined()
     }
 
     private func serializeInline(_ node: TiptapNode) -> String {
@@ -274,7 +325,14 @@ struct MarkdownSerializer {
     /// Apply marks to a text run, innermost (closest to the text) first so the
     /// resulting Markdown nests correctly.
     private func applyMarks(text: String, marks: [TiptapMark]) -> String {
-        var result = text
+        // CommonMark emphasis delimiters cannot enclose leading/trailing
+        // whitespace. Keep it outside the marks without changing the text.
+        let hasEmphasis = marks.contains { ["bold", "italic", "strike"].contains($0.type) }
+        let leading = hasEmphasis ? String(text.prefix(while: { $0.isWhitespace })) : ""
+        let remainder = text.dropFirst(leading.count)
+        let trailing = hasEmphasis ? String(remainder.reversed().prefix(while: { $0.isWhitespace }).reversed()) : ""
+        var result = String(remainder.dropLast(trailing.count))
+        guard !result.isEmpty else { return text }
         for mark in marks {
             switch mark.type {
             case "code":
@@ -296,7 +354,7 @@ struct MarkdownSerializer {
                 break
             }
         }
-        return result
+        return leading + result + trailing
     }
 
     // MARK: Image src rewrite

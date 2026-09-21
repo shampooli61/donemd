@@ -409,11 +409,47 @@ struct ASTConverter {
     }
 
     private func wrapCell(_ cell: Markdown.Table.Cell, type: String) -> TiptapNode {
-        // Tiptap's table-cell schema requires `block+` content. Wrap the
-        // inline children of the cell in a paragraph.
-        let inline = convertInline(of: cell)
-        let paragraph = TiptapNode(type: "paragraph", content: inline.isEmpty ? nil : inline)
-        return TiptapNode(type: type, content: [paragraph])
+        // Images and opaque media are block nodes in the editor schema.
+        // Split the cell at media and <br>, keeping text in paragraphs.
+        var blocks: [TiptapNode] = []
+        var run: [TiptapNode] = []
+        func flush() {
+            if !run.isEmpty {
+                blocks.append(TiptapNode(type: "paragraph", content: coalesceAdjacentText(run)))
+                run = []
+            }
+        }
+        for child in cell.children {
+            if let html = child as? InlineHTML {
+                let raw = html.rawHTML
+                if ["<br>", "<br/>", "<br />"].contains(raw.lowercased()) {
+                    flush()
+                    continue
+                }
+                if raw.hasPrefix("<!-- feishu-placeholder&#10;") {
+                    let decoded = raw.replacingOccurrences(of: "&#10;", with: "\n")
+                        .replacingOccurrences(of: "&#124;", with: "|")
+                        .replacingOccurrences(of: "&amp;", with: "&")
+                    if let placeholder = FeishuPlaceholderEngine.parse(decoded) {
+                        flush()
+                        blocks.append(makeFeishuPlaceholderBlock(placeholder))
+                        continue
+                    }
+                }
+            }
+            var nodes: [TiptapNode] = []
+            walkInline(child, marks: [], into: &nodes)
+            for node in nodes {
+                if node.type == "image" {
+                    flush()
+                    blocks.append(node)
+                } else {
+                    run.append(node)
+                }
+            }
+        }
+        flush()
+        return TiptapNode(type: type, content: blocks.isEmpty ? [TiptapNode(type: "paragraph")] : blocks)
     }
 
     // MARK: Inline

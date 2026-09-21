@@ -18,6 +18,40 @@ import XCTest
 ///   - progress UI / cancellation
 ///   - revision conflict detection
 final class FeishuPushCoordinatorTests: XCTestCase {
+    func testNestedMediaStopsBeforeWriting() async throws {
+        // Remote grids can flatten media to the local root; conversely a
+        // local edit can move remote root media into a table. Neither shape
+        // may enter the root-only segmented writer or its skip/retry flow.
+        for (localNested, remoteNested) in [(true, true), (true, false), (false, true)] {
+            let api = MockFeishuAPIClient()
+            api.pullDocumentResponse = [
+                .init(blockId: "doc", children: ["table"], payload: .page(.init())),
+                .init(blockId: "table", children: ["cell"], payload: .table(.init(rowSize: 1, columnSize: 1))),
+                .init(blockId: "cell", children: ["movie"], payload: .tableCell),
+                .init(blockId: "movie", payload: .placeholder(.init(subtype: .video, title: "示例视频", url: ""))),
+            ]
+            let body = localNested
+                ? MarkdownEngine.parse(markdown: FeishuStructuralConverter.toMarkdown(api.pullDocumentResponse))
+                : TiptapNode(type: "doc", content: [placeholderNode(blockId: "movie", title: "示例视频", type: "video")])
+            if !remoteNested { api.pullDocumentResponse[0].children = ["movie"] }
+            let input = MarkdownEngine.ParsedDocument(
+                frontmatter: makeBoundFrontmatter(docToken: "doc", placeholderIds: [("movie", "video")]), body: body
+            )
+            do {
+                _ = try await FeishuPushCoordinator(apiClient: api).push(input, title: "示例", parentToken: nil)
+                XCTFail("nested media must be preserved")
+            } catch let error as FeishuPushCoordinator.PushError {
+                guard case .nestedPlaceholderBlocks(let ids) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertEqual(ids, ["movie"])
+            }
+            XCTAssertTrue(api.pushCalls.isEmpty)
+            XCTAssertTrue(api.segmentedCalls.isEmpty)
+            XCTAssertTrue(api.updateTitleCalls.isEmpty)
+            XCTAssertTrue(api.uploadCalls.isEmpty)
+        }
+    }
 
     // MARK: - happy paths
 
@@ -157,7 +191,7 @@ final class FeishuPushCoordinatorTests: XCTestCase {
                 return c.elements.map { runContent($0) }
             case .page(let p):
                 return p.title.elements.map { runContent($0) }
-            case .divider, .image, .callout, .table, .tableCell, .placeholder:
+            case .divider, .image, .callout, .table, .tableCell, .placeholder, .layoutContainer:
                 return []
             }
         }.joined(separator: "\n")

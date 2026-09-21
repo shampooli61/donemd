@@ -232,6 +232,9 @@ enum FeishuBlockEncoder {
             ])
         case .tableCell:
             return ("table_cell", [:])
+        case .layoutContainer:
+            // Pull flattens layout containers before any push conversion.
+            return ("layout", nil)
         case .placeholder:
             // step3 / 9b owns preserve_existing reference shape. Step1'
             // never invokes the encoder on a placeholder block — the
@@ -305,9 +308,7 @@ enum FeishuBlockEncoder {
     /// listing) into a typed `FeishuBlock`. Replaces the `.divider`-only
     /// fallback v2-5 shipped before any real wire fixture was on hand.
     ///
-    /// Unknown block_types still fall through to `.divider` so the pull
-    /// path never hard-fails on a Feishu schema addition — diagnosable via
-    /// logs, not an exception.
+    /// Unknown block types become opaque references, never fabricated dividers.
     static func decodeBlockEnvelope(_ dict: [String: Any]) throws -> FeishuBlock {
         guard let blockId = dict["block_id"] as? String,
               let blockTypeRaw = dict["block_type"] as? Int else {
@@ -380,6 +381,8 @@ enum FeishuBlockEncoder {
                 emoji: body["emoji_id"] as? String,
                 backgroundColor: bgName
             ))
+        case 24, 25:
+            return .layoutContainer(blockType: blockType)
         case 22:
             return .divider
         case 27:
@@ -522,15 +525,16 @@ enum FeishuBlockEncoder {
                 url: ""
             ))
         default:
-            // Unknown / not-yet-supported block_type (chat-card, equation,
-            // grid / grid-column, OKR family, AddOns, JiraIssue,
-            // SyncedBlock, …). Fall through to .divider so pull never
-            // hard-fails on a Feishu schema addition. These should
-            // surface as a converter warning long-term so the user
-            // knows content was lost — currently just diagnosable
-            // via debugLog.
-            debugLog("[pull] unknown block_type \(blockType) → divider fallback")
-            return .divider
+            // Keep an opaque reference; an unsupported block is never a
+            // horizontal rule. The existing placeholder push preflight
+            // protects the remote block from destructive replacement.
+            return .placeholder(.init(
+                subtype: .embed,
+                blockToken: nil,
+                title: "飞书内容（类型 \(blockType)）",
+                summary: "此内容暂不支持本地编辑，请在飞书中查看。",
+                url: ""
+            ))
         }
     }
 

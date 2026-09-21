@@ -331,6 +331,7 @@ final class FeishuStructuralConverterRoundTripFixtureTests: XCTestCase {
         case .image: return "image"
         case .table: return "table"
         case .tableCell: return "tableCell"
+        case .layoutContainer: return "layoutContainer"
         case .placeholder(let p): return "placeholder(\(p.subtype))"
         }
     }

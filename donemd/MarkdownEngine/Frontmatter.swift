@@ -87,6 +87,7 @@ public struct FeishuFrontmatter: Equatable {
     public var docToken: DocToken?
     public var docURL: URL?
     public var lastPulledRevision: Int?
+    public var pullFormatVersion: Int?
     public var lastPushedAt: Date?
     public var placeholderBlocks: [PlaceholderBlockRef]
 
@@ -99,6 +100,7 @@ public struct FeishuFrontmatter: Equatable {
         docToken: DocToken? = nil,
         docURL: URL? = nil,
         lastPulledRevision: Int? = nil,
+        pullFormatVersion: Int? = nil,
         lastPushedAt: Date? = nil,
         placeholderBlocks: [PlaceholderBlockRef] = [],
         unknownFields: [UnknownField] = []
@@ -106,6 +108,7 @@ public struct FeishuFrontmatter: Equatable {
         self.docToken = docToken
         self.docURL = docURL
         self.lastPulledRevision = lastPulledRevision
+        self.pullFormatVersion = pullFormatVersion
         self.lastPushedAt = lastPushedAt
         self.placeholderBlocks = placeholderBlocks
         self.unknownFields = unknownFields
@@ -115,6 +118,7 @@ public struct FeishuFrontmatter: Equatable {
         docToken == nil
             && docURL == nil
             && lastPulledRevision == nil
+            && pullFormatVersion == nil
             && lastPushedAt == nil
             && placeholderBlocks.isEmpty
             && unknownFields.isEmpty

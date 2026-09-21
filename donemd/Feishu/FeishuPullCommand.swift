@@ -127,6 +127,8 @@ enum FeishuPullCommand {
                     + " warnings=\(result.warnings.count)"
                 )
 
+                // A format upgrade must reapply even the same remote revision,
+                // otherwise old empty cells and literal marks can never recover.
                 // No-op pull: revision_id matches what we already have
                 // on disk → Feishu side hasn't moved since the last
                 // pull. Skip applyUpdatedDocumentAndSave so we don't
@@ -136,7 +138,8 @@ enum FeishuPullCommand {
                 // truth: nothing changed.
                 if let oldRev = oldRevision,
                    let newRev = newRevision,
-                   oldRev == newRev {
+                   oldRev == newRev,
+                   existing.frontmatter.feishu?.pullFormatVersion == FeishuStructuralConverter.formatVersion {
                     var lines: [String] = []
                     lines.append("飞书暂无更新——文档保持原样。")
                     lines.append(
@@ -532,7 +535,7 @@ enum FeishuPullCommand {
         case .feishuInlineColorStripped(let runCount):
             return "\(runCount) 段文字带有飞书侧的字色 / 背景色，本地暂不支持文字着色（追踪：GH #59 Phase 5），文字本身已保留，颜色丢失。"
         case .tableCellBlockContentDropped(let cellCount):
-            return "\(cellCount) 处表格单元格里含飞书的高亮块 / 列表 / 标题等块级内容，被压平为单元格里第一段文字（GFM 表格不支持单元格内嵌块，是架构边界——见 ADR-0007 § 已知限制）。"
+            return "\(cellCount) 处表格单元格里含飞书的高亮块 / 列表 / 标题等块级内容，已保留文字、图片和媒体引用；标题层级、列表缩进和高亮背景会转为普通单元格内容。"
         }
     }
 

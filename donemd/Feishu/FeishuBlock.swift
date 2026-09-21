@@ -66,6 +66,7 @@ extension FeishuBlock {
         case image(ImagePayload)                // 27
         case table(TablePayload)                // 31
         case tableCell                          // 32
+        case layoutContainer(blockType: Int)     // 24 grid / 25 grid_column (pull only)
         case placeholder(PlaceholderPayload)    // 23 / 24 / 25 / 26 / 28 / 33 / 43
 
         public var blockType: Int {
@@ -83,6 +84,7 @@ extension FeishuBlock {
             case .image: return 27
             case .table: return 31
             case .tableCell: return 32
+            case .layoutContainer(let type): return type
             case .placeholder(let p): return p.subtype.blockType
             }
         }

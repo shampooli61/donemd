@@ -205,6 +205,7 @@ public final class FeishuPullCoordinator {
         var feishu = existing?.feishu ?? FeishuFrontmatter()
         feishu.docToken = token
         feishu.lastPulledRevision = revisionId
+        feishu.pullFormatVersion = FeishuStructuralConverter.formatVersion
         feishu.placeholderBlocks = placeholderRefs
         // Stamp the human-navigable doc URL when the caller supplies one
         // (URL-import path). Feishu doc URLs live on a tenant subdomain that

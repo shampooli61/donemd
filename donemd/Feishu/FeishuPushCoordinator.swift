@@ -47,6 +47,8 @@ public final class FeishuPushCoordinator {
         /// in document order — useful for the dialog's "this document has
         /// N Feishu-only blocks" copy and for log triage.
         case containsPlaceholderBlocks(blockIds: [String])
+        /// Segmented push currently preserves only root-level anchors.
+        case nestedPlaceholderBlocks(blockIds: [String])
         /// Frontmatter `feishu.placeholder_blocks` index disagrees with the
         /// body's actual `feishu_placeholder_block` nodes. The dangerous
         /// case is `missingFromBody` — the index says the doc has a sheet,
@@ -314,6 +316,18 @@ public final class FeishuPushCoordinator {
                 missingFromBody: missingFromBody,
                 missingFromIndex: missingFromIndex
             )
+        }
+
+        if document.frontmatter.feishu?.docToken != nil {
+            let rootPlaceholderIds = Set((document.body.content ?? []).compactMap { node -> String? in
+                guard node.type == "feishu_placeholder_block",
+                      case .string(let id)? = node.attrs?["block_id"] else { return nil }
+                return id
+            })
+            let nestedIds = bodyPlaceholderIds.filter { !rootPlaceholderIds.contains($0) }
+            if !nestedIds.isEmpty {
+                throw PushError.nestedPlaceholderBlocks(blockIds: nestedIds)
+            }
         }
 
         // #51 v2-9b revision-conflict preflight (bound + has localRev only).
@@ -751,6 +765,20 @@ public final class FeishuPushCoordinator {
 
         let localSet = Set(localPlaceholderIds)
         let remoteSet = Set(remotePlaceholderIds)
+
+        // A preserved reference inside a table/grid/list still exists on
+        // Feishu, but root-only segmented push cannot retain its parent.
+        // Never offer the "skip deleted references" recovery for it.
+        let allRemotePlaceholderIds = Set(pulled.blocks.compactMap { block -> String? in
+            if case .placeholder = block.payload { return block.blockId }
+            return nil
+        })
+        let nested = localPlaceholderIds.filter {
+            allRemotePlaceholderIds.contains($0) && !remoteSet.contains($0)
+        }
+        if !nested.isEmpty {
+            throw PushError.nestedPlaceholderBlocks(blockIds: nested)
+        }
 
         // Direction 1: local has ids Feishu-side doesn't.
         // Recovery via [跳过 / 取消] dialog at the UI layer.

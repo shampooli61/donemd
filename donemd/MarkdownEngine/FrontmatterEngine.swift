@@ -293,6 +293,8 @@ public enum FrontmatterEngine {
                 if let n = valueNode.int {
                     result.lastPulledRevision = n
                 }
+            case "pull_format_version":
+                result.pullFormatVersion = valueNode.int
             case "last_pushed_at":
                 if let s = valueNode.string,
                    let date = parseISO8601(s) {
@@ -391,6 +393,9 @@ public enum FrontmatterEngine {
         }
         if let rev = feishu.lastPulledRevision {
             s += "  last_pulled_revision: \(rev)\n"
+        }
+        if let version = feishu.pullFormatVersion {
+            s += "  pull_format_version: \(version)\n"
         }
         if let date = feishu.lastPushedAt {
             s += "  last_pushed_at: \(yamlEmitScalar(formatISO8601(date)))\n"

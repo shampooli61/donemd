@@ -19,6 +19,16 @@ import XCTest
 ///   - placeholder index frontmatter sync
 ///   - revision conflict detection — that's #51
 final class FeishuPullCoordinatorTests: XCTestCase {
+    func testPullStampsFormatVersionEvenWhenRemoteRevisionIsUnchanged() async throws {
+        let api = MockFeishuAPIClient()
+        api.pullDocumentResponse = pageWithParagraph(pageId: "doc", text: "restored content")
+        api.pullDocumentRevision = 5
+        let existing = parsedDocument(frontmatterYAML: "feishu:\n  doc_token: doc\n  last_pulled_revision: 5\n", body: "old conversion\n")
+        let result = try await FeishuPullCoordinator(apiClient: api).pull(token: DocToken("doc"), into: existing)
+        let saved = MarkdownEngine.serialize(document: result.updatedDocument)
+        XCTAssertTrue(saved.contains("pull_format_version: 1"))
+        XCTAssertEqual(MarkdownEngine.serialize(document: MarkdownEngine.parseDocument(source: saved)), saved)
+    }
 
     // MARK: - happy paths
 

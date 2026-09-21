@@ -488,19 +488,31 @@ final class FeishuBlockEncoderTests: XCTestCase {
         }, "the file child is absorbed, not dropped — no false loss warning")
     }
 
-    /// Unknown block_type still falls through to .divider (safety net
-    /// — no hard failure on a Feishu schema addition like OKR / Synced).
-    func testDecodeTrulyUnknownBlockTypeFallsThroughToDivider() throws {
-        let dict: [String: Any] = [
-            "block_id": "doxc_FUTURE",
-            "block_type": 999,  // not in any known mapping
-            "parent_id": "page_X",
+    func testUnknownBlockPreservesReferenceInsteadOfInventingDivider() throws {
+        let block = try FeishuBlockEncoder.decodeBlockEnvelope([
+            "block_id": "future", "block_type": 999, "parent_id": "page"
+        ])
+        let md = FeishuStructuralConverter.toMarkdown([
+            .init(blockId: "page", children: ["future"], payload: .page(.init())), block
+        ])
+        XCTAssertFalse(md.contains("---"))
+        XCTAssertTrue(md.contains("block_id: future"))
+        XCTAssertTrue(md.contains("999"))
+    }
+
+    func testGridKeepsColumnTextAndMediaWithoutDividers() throws {
+        let raw: [[String: Any]] = [
+            ["block_id": "page", "block_type": 1, "children": ["grid"]],
+            ["block_id": "grid", "block_type": 24, "children": ["column"]],
+            ["block_id": "column", "block_type": 25, "children": ["text", "image"]],
+            ["block_id": "text", "block_type": 2, "text": ["elements": [["text_run": ["content": "分栏中的正文"]]]]],
+            ["block_id": "image", "block_type": 27, "image": ["token": "sample-image"]],
         ]
-        let block = try FeishuBlockEncoder.decodeBlockEnvelope(dict)
-        guard case .divider = block.payload else {
-            XCTFail("expected .divider fallback for unknown block_type, got \(block.payload)")
-            return
-        }
+        let blocks = try raw.map(FeishuBlockEncoder.decodeBlockEnvelope)
+        let md = FeishuStructuralConverter.toMarkdown(blocks)
+        XCTAssertTrue(md.contains("分栏中的正文"))
+        XCTAssertTrue(md.contains("feishu://image/sample-image"))
+        XCTAssertFalse(md.contains("---"))
     }
 
     /// Quote container: the synthesized text child has the quote's

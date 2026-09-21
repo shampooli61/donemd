@@ -246,6 +246,11 @@ enum FeishuPushCommand {
                     建议：从飞书重新拉取（pull）覆盖本地，或撤销手动改动。修复后再推送。
                     """
                 )
+            case .nestedPlaceholderBlocks(let blockIds):
+                presentAlert(
+                    title: "此文档暂不支持推送",
+                    message: "表格、分栏或其他嵌套内容中有 \(blockIds.count) 个飞书视频、画板等原生块。当前可拉取和本地查看；请在飞书中修改这份文档，以保留这些内容。此次未写入飞书。"
+                )
             case .containsPlaceholderBlocks(let blockIds):
                 // Legacy stop-ship dialog — now only reachable for
                 // unbound docs containing placeholders (segmented push

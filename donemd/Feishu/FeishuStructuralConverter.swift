@@ -20,6 +20,9 @@ import Foundation
 /// blocks (sheet / mindnote / board / bitable / attachment / video /
 /// embed) routed through the `feishu_placeholder_block` Tiptap node.
 public enum FeishuStructuralConverter {
+    /// Bump when a pull can recover content lost by an older converter.
+    public static let formatVersion = 1
+
 
     // MARK: Feishu → Markdown
 
@@ -116,7 +119,7 @@ public enum FeishuStructuralConverter {
             elements = t.elements
         case .code(let c):
             elements = c.elements
-        case .callout, .divider, .image, .table, .tableCell, .placeholder:
+        case .callout, .divider, .image, .table, .tableCell, .placeholder, .layoutContainer:
             // callout / table cells carry their text in *child* blocks, so
             // their inline runs surface elsewhere in the walk; the empty
             // payloads have no inline at all.
@@ -180,15 +183,9 @@ public enum FeishuStructuralConverter {
         /// pull result dialog, not per-run noise.
         case feishuInlineColorStripped(runCount: Int)
 
-        /// Pull-side: a Feishu table cell contained block-level content
-        /// (callout / list / heading / nested table / image / etc.)
-        /// that GFM markdown's table syntax can't carry — GFM cells
-        /// only hold inline content. Done.md collapses each such cell
-        /// to its first text block (or empty if there's no text), and
-        /// emits this warning so the user knows the cell isn't
-        /// faithful to the Feishu side. `cellCount` aggregates across
-        /// the whole document. Workaround in PRD: keep block content
-        /// outside the table on Feishu side, or accept the loss.
+        /// Pull-side: cell block styling (heading level / list / callout)
+        /// is flattened for GFM. All text, images and opaque references are
+        /// retained. The historical case name is kept for API compatibility.
         case tableCellBlockContentDropped(cellCount: Int)
     }
 
@@ -249,6 +246,10 @@ public enum FeishuStructuralConverter {
         while i < siblings.count {
             let block = siblings[i]
             switch block.payload {
+            case .layoutContainer:
+                let children = (block.children ?? []).compactMap { byId[$0] }
+                out.append(contentsOf: renderSiblings(children, byId: byId, ctx: ctx))
+                i += 1
             case .bullet, .ordered, .todo:
                 let kind = listKind(of: block.payload)
                 var run: [FeishuBlock] = []
@@ -333,6 +334,8 @@ public enum FeishuStructuralConverter {
         ctx: ConversionContext
     ) -> TiptapNode? {
         switch block.payload {
+        case .layoutContainer:
+            return nil // handled transparently by renderSiblings
         case .page:
             // Page-as-child shouldn't happen — pages are roots only.
             return nil
@@ -492,12 +495,8 @@ public enum FeishuStructuralConverter {
         return TiptapNode(type: "feishu_placeholder_block", attrs: attrs)
     }
 
-    /// Render a Feishu table block as a Tiptap `table` node. The first
-    /// row becomes `tableHeader` cells when `headerRow` is true (always
-    /// true for v2 — GFM requires headers). Cell children flatten to a
-    /// single `paragraph` because GFM table cells can't carry block
-    /// content; rich-cell content (lists / nested tables) is a known
-    /// limitation tracked in [[已知限制]].
+    /// Preserve all cell content, including media, through table-aware
+    /// Markdown serialization. GFM still flattens block styling and spans.
     private static func renderTable(
         block: FeishuBlock,
         payload: FeishuBlock.TablePayload,
@@ -505,7 +504,7 @@ public enum FeishuStructuralConverter {
         ctx: ConversionContext
     ) -> TiptapNode {
         let cellIds = block.children ?? []
-        let expected = max(0, payload.rowSize) * max(0, payload.columnSize)
+        let expected = max(1, payload.rowSize) * max(1, payload.columnSize)
         // Be defensive: if Feishu sends fewer cells than rowSize × columnSize
         // claims (corrupt input), pad/truncate so we never read past array.
         var cells: [TiptapNode] = []
@@ -537,32 +536,15 @@ public enum FeishuStructuralConverter {
         guard let block = block else {
             return TiptapNode(type: "tableCell", content: [TiptapNode(type: "paragraph")])
         }
-        // A cell's children are block IDs; for GFM compatibility we
-        // collapse to the first paragraph's inline content. If the cell
-        // has no children (rare) use an empty paragraph.
-        //
-        // GFM markdown table cells can only carry inline content. When a
-        // Feishu cell has block-level children other than a leading
-        // `.text` (callout / list / heading / nested table / image),
-        // those are dropped here. We emit a single warning per cell so
-        // the user is told upfront the cell isn't faithful — not per
-        // dropped child, since a cell can have many.
         let childBlocks = (block.children ?? []).compactMap { byId[$0] }
-        let hasNonTextBlock = childBlocks.contains { blk in
-            if case .text = blk.payload { return false } else { return true }
-        }
-        if hasNonTextBlock {
+        let rendered = renderSiblings(childBlocks, byId: byId, ctx: ctx)
+        // Preserve every paragraph and media node. GFM can't represent the
+        // block styling of headings/lists/callouts inside cells; only that
+        // styling is flattened, never the remaining content of the cell.
+        if rendered.contains(where: { !["paragraph", "image", "feishu_placeholder_block"].contains($0.type) }) {
             ctx.emit(.tableCellBlockContentDropped(cellCount: 1))
         }
-        let firstText: FeishuBlock? = childBlocks.first { blk in
-            if case .text = blk.payload { return true } else { return false }
-        }
-        if case .text(let payload)? = firstText?.payload {
-            let inlines = inline(from: payload)
-            let para = TiptapNode(type: "paragraph", content: inlines.isEmpty ? nil : inlines)
-            return TiptapNode(type: "tableCell", content: [para])
-        }
-        return TiptapNode(type: "tableCell", content: [TiptapNode(type: "paragraph")])
+        return TiptapNode(type: "tableCell", content: rendered.isEmpty ? [TiptapNode(type: "paragraph")] : rendered)
     }
 
     private static func paragraph(from payload: FeishuBlock.TextPayload) -> TiptapNode {
@@ -949,25 +931,16 @@ public enum FeishuStructuralConverter {
                 let cellId = ctx.nextId()
                 cellIds.append(cellId)
 
-                // Inner text block: collapse cell's first paragraph into
-                // a Feishu text block. Empty cells get an empty text block.
-                let inlines = (cellNode?.content?.first(where: { $0.type == "paragraph" })?.content) ?? []
-                let textPayloadValue = textPayload(from: inlines)
-                let textId = ctx.nextId()
-                ctx.push(FeishuBlock(
-                    blockId: textId,
-                    parentId: cellId,
-                    children: nil,
-                    payload: .text(textPayloadValue)
-                ))
-                // Splice the cell ahead of its child text block.
+                let content = cellNode?.content ?? []
+                let childIds = (content.isEmpty ? [TiptapNode(type: "paragraph")] : content)
+                    .flatMap { emit(node: $0, parentId: cellId, ctx: &ctx) }
                 let cellBlock = FeishuBlock(
                     blockId: cellId,
                     parentId: tableId,
-                    children: [textId],
+                    children: childIds,
                     payload: .tableCell
                 )
-                insertBlock(cellBlock, before: [textId], ctx: &ctx)
+                insertBlock(cellBlock, before: childIds, ctx: &ctx)
             }
         }
 

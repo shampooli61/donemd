@@ -11,6 +11,33 @@ import XCTest
 /// - **Blocks → Markdown**: hand-built block trees verify the canonical
 ///   Markdown output.
 final class FeishuStructuralConverterRichBlocksTests: XCTestCase {
+    func testRichTableCellSurvivesPullSaveReopenAndConversionBack() throws {
+        let blocks: [FeishuBlock] = [
+            page(children: ["table"]),
+            .init(blockId: "table", children: ["cell"], payload: .table(.init(rowSize: 1, columnSize: 1))),
+            .init(blockId: "cell", children: ["heading", "text", "image1", "image2", "video"], payload: .tableCell),
+            .init(blockId: "heading", payload: .heading(level: 5, .init(elements: [.textRun(.init(content: "示例标题"))]))),
+            .init(blockId: "text", payload: .text(.init(elements: [.textRun(.init(content: "第二段 A | B"))]))),
+            .init(blockId: "image1", payload: .image(.init(token: "image-a"))),
+            .init(blockId: "image2", payload: .image(.init(token: "image-b"))),
+            .init(blockId: "video", payload: .placeholder(.init(subtype: .video, blockToken: "movie", title: "示例视频", url: "feishu://video/movie"))),
+        ]
+        let markdown = FeishuStructuralConverter.toMarkdown(blocks)
+        let reopened = MarkdownEngine.parse(markdown: markdown)
+        let table = try XCTUnwrap(reopened.content?.first)
+        XCTAssertEqual(table.type, "table")
+        let cells = table.content?.first?.content ?? []
+        XCTAssertEqual(cells.count, 1, "literal pipes must not create extra cells")
+        let content = try XCTUnwrap(cells.first?.content)
+        XCTAssertEqual(content.filter { $0.type == "image" }.count, 2)
+        XCTAssertEqual(content.filter { $0.type == "feishu_placeholder_block" }.count, 1)
+        XCTAssertTrue(markdown.contains("示例标题"))
+        XCTAssertTrue(markdown.contains("第二段"))
+        XCTAssertEqual(MarkdownEngine.serialize(document: reopened), markdown)
+        let pushed = FeishuStructuralConverter.toFeishuBlocks(tiptap: reopened)
+        XCTAssertEqual(pushed.filter { if case .image = $0.payload { return true }; return false }.count, 2)
+        XCTAssertTrue(pushed.contains { $0.blockId == "video" })
+    }
 
     // MARK: helpers
 
