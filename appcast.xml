@@ -3,6 +3,15 @@
     <channel>
         <title>马上做完</title>
         <item>
+            <title>1.1.0</title>
+            <description><![CDATA[<h3>同步与恢复</h3><ul><li>推送先写入并核对新正文，再删除旧正文；提前显示不支持内容，避免静默丢失。</li><li>每次拉取保护未保存修改，保留最近 30 天、最多 20 个恢复版本。</li><li>区分写入与核验结果，支持重新核对。</li></ul><h3>编辑与阅读</h3><ul><li>原生撤销／重做、文档内查找、原文块编辑。</li><li>查找支持表格和折叠章节；源码栏可隐藏并标识只读。</li><li>无规范化差异时跳过首次保存提示，导入失败显示原因及重试指引。</li></ul><h3>AI 与质量</h3><ul><li>区分 AI 操作和设置，展示处理范围，完善键盘导航及辅助功能名称。</li><li>加入类型检查和发布回归门槛。</li></ul><p>公式、原文块目前会提前阻止推送；本地视频仍不上传飞书。</p>]]></description>
+            <pubDate>Mon, 21 Sep 2026 18:10:54 +0800</pubDate>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/shampooli61/donemd/releases/download/v1.1.0/Done.md-1.1.0.zip" length="7004876" type="application/octet-stream" sparkle:edSignature="0MlnAjPwplTa9kG4Gesvfx9M+y/qYeVVdDisWpRj63F/WnmlfC8i2ALsJ8Ff4RgdNQO5kt3iz6Uyh0Q7PRDMBw=="/>
+        </item>
+        <item>
             <title>1.0.1</title>
             <description><![CDATA[<h3>新增</h3><ul><li>格式菜单和选区浮窗支持 H1 / H2 / H3，浮窗显示当前层级，再次点击还原正文。</li></ul><h3>优化与修复</h3><ul><li>恢复飞书表格中的多段文字、图片及视频引用。</li><li>修复异常分割线、多余波浪号及部分中文加粗显示。</li><li>旧文档重新拉取即可应用修复。</li><li>含嵌套视频、画板等原生引用的文档增加推送保护。</li></ul><p>视频和画板仍为飞书引用卡片，复杂合并单元格排版会简化。</p>]]></description>
             <pubDate>Mon, 21 Sep 2026 15:53:14 +0800</pubDate>
