@@ -26,7 +26,7 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
-import { AI_GROUPS } from './bubble-menu';
+import { AI_GROUPS, aiScopeHint } from './bubble-menu';
 
 export const slashMenuKey = new PluginKey('slashMenu');
 
@@ -154,36 +154,39 @@ export interface SlashMenuHandle {
 function createPanel(handle: SlashMenuHandle) {
   const root = document.createElement('div');
   root.className = 'donemd-slash';
+  root.setAttribute('role', 'menu'); root.setAttribute('aria-label', 'AI 操作'); root.tabIndex = -1;
   root.style.display = 'none';
   document.body.appendChild(root);
 
   let items: SlashCommand[] = [];
   let active = 0;
   let open = false;
+  let activeView: EditorView | undefined;
 
   const render = (): void => {
     root.replaceChildren();
     items.forEach((cmd, i) => {
-      const row = document.createElement('div');
+      const row = document.createElement('button'); row.type = 'button'; row.tabIndex = -1;
+      row.id = `ai-command-${i}`; row.setAttribute('role', 'menuitem');
+      row.setAttribute('aria-label', `${cmd.label}，${aiScopeHint(cmd.kind)}`);
       row.className = 'donemd-slash__item' + (i === active ? ' is-active' : '');
       const label = document.createElement('span');
       label.className = 'donemd-slash__label';
       label.textContent = cmd.label;
       const hint = document.createElement('span');
       hint.className = 'donemd-slash__hint';
-      hint.textContent = cmd.hint;
+      hint.textContent = aiScopeHint(cmd.kind);
       row.appendChild(label);
       row.appendChild(hint);
       // mousedown (not click) so the editor selection isn't lost first.
-      row.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        pick(i);
-      });
+      row.addEventListener('mousedown', e => e.preventDefault());
+      row.addEventListener('click', () => pick(i));
       row.addEventListener('mousemove', () => {
         if (active !== i) { active = i; render(); }
       });
       root.appendChild(row);
     });
+    root.setAttribute('aria-activedescendant', `ai-command-${active}`);
   };
 
   const positionAtCaret = (view: EditorView): void => {
@@ -211,29 +214,32 @@ function createPanel(handle: SlashMenuHandle) {
   };
 
   const show = (view: EditorView): void => {
+    activeView = view;
     items = orderedCommands(view);
     active = 0;
     open = true;
     render();
     root.style.display = 'block';
     positionAtCaret(view);
+    root.focus();
     // With a selection, the bubble menu ([[选区浮窗]]) is also showing — suppress
     // it so the two panels don't stack. CSS hides .donemd-bubble while this
     // class is on <body>. Cleared in hide().
     document.body.classList.add('donemd-slash-open');
   };
 
-  const hide = (): void => {
+  const hide = (restoreFocus = false): void => {
     open = false;
     root.style.display = 'none';
     document.body.classList.remove('donemd-slash-open');
+    if (restoreFocus) activeView?.focus();
   };
 
   const pick = (i: number): void => {
     const cmd = items[i];
     if (!cmd) return;
     pushRecent(cmd.family, cmd.kind);
-    hide();
+    hide(true);
     handle.onPick(cmd);
   };
 
@@ -254,7 +260,8 @@ function createPanel(handle: SlashMenuHandle) {
         e.preventDefault();
         pick(active); return true;
       case 'Escape':
-        hide(); return true;
+      case 'Tab':
+        e.preventDefault(); hide(true); return true;
       default:
         // Bare modifier presses (⌘/⇧/⌥/⌃ held alone) aren't a dismissal — the
         // user may be reaching for a shortcut; keep the panel open.
@@ -268,7 +275,10 @@ function createPanel(handle: SlashMenuHandle) {
     }
   };
 
-  return { show, hide, handleKey, isOpen: () => open };
+  root.addEventListener('keydown', e => { if (handleKey(e)) { e.preventDefault(); e.stopPropagation(); } });
+  const outside = (e: MouseEvent) => { if (open && !root.contains(e.target as Node)) hide(); };
+  document.addEventListener('mousedown', outside);
+  return { show, hide, handleKey, isOpen: () => open, destroy: () => { root.remove(); document.removeEventListener('mousedown', outside); } };
 }
 
 export function createSlashMenu(handle: SlashMenuHandle) {
@@ -276,6 +286,7 @@ export function createSlashMenu(handle: SlashMenuHandle) {
 
   const extension = Extension.create({
     name: 'slashMenu',
+    onDestroy() { panel.destroy(); },
     addProseMirrorPlugins() {
       return [
         new Plugin({

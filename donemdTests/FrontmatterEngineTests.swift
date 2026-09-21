@@ -387,3 +387,18 @@ final class FrontmatterEngineTests: XCTestCase {
         )
     }
 }
+
+
+final class SyncVerificationMetadataTests: XCTestCase {
+    func testRecoveryStatusSurvivesSaveAndReopen() {
+        var doc = MarkdownEngine.parseDocument(source: "正文\n")
+        var feishu = FeishuFrontmatter(docToken: DocToken("doc"))
+        feishu.verificationExpected = "abc123"
+        feishu.pushReadOnlyReason = "表格：请在飞书修改"
+        doc.frontmatter.feishu = feishu
+        let reopened = MarkdownEngine.parseDocument(source: MarkdownEngine.serialize(document: doc))
+        XCTAssertEqual(reopened.frontmatter.feishu?.verificationExpected, "abc123")
+        XCTAssertEqual(reopened.frontmatter.feishu?.pushReadOnlyReason, "表格：请在飞书修改")
+        XCTAssertEqual(reopened.body, doc.body)
+    }
+}

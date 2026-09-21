@@ -29,6 +29,7 @@ if [ "$RESUME" -eq 0 ]; then
     echo "Archive already exists: $ARCHIVE_PATH. Use --resume for a submitted build." >&2
     exit 1
   fi
+  bash scripts/check.sh
   xcodegen generate
   xcodebuild -project donemd.xcodeproj -scheme donemd -configuration Release \
     -destination 'generic/platform=macOS' -derivedDataPath "$DERIVED_DATA" \

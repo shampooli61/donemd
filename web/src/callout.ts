@@ -130,7 +130,7 @@ function showPicker(host: PickerHost): void {
 
   activePicker = picker;
   activeOutsideHandler = (e: MouseEvent) => {
-    if (picker.contains(e.target as Node)) return;
+    if (picker.contains(e.target as globalThis.Node)) return;
     dismissPicker();
   };
   // Capture phase so we beat the editor's own handlers.
@@ -413,7 +413,7 @@ export const Callout = Node.create({
         // so they don't re-trigger a NodeView rebuild.
         ignoreMutation: (mutation) => {
           if (mutation.type === 'selection') return false;
-          return !contentEl.contains(mutation.target as Node);
+          return !contentEl.contains(mutation.target as globalThis.Node);
         },
       };
     };

@@ -152,13 +152,26 @@ public final class FeishuPullCoordinator {
         }
 
         let placeholderRefs = collectPlaceholderRefs(in: parsedBody)
-        let mergedFrontmatter = mergeFrontmatter(
+        var mergedFrontmatter = mergeFrontmatter(
             existing: existing?.frontmatter,
             token: token,
             revisionId: pulled.revisionId,
             placeholderRefs: placeholderRefs,
             docURL: docURL
         )
+
+        // A flattened grid can hide remote nesting from the local tree.
+        // Preserve the capability restriction at import time, before editing.
+        let rootIDs = Set(pulled.blocks.first { if case .page = $0.payload { return true }; return false }?.children ?? [])
+        let hasNestedReference = pulled.blocks.contains { block in
+            if case .placeholder = block.payload { return !rootIDs.contains(block.blockId) }
+            return false
+        }
+        mergedFrontmatter.feishu?.pushReadOnlyReason = nil
+        mergedFrontmatter.feishu?.verificationExpected = nil
+        if hasNestedReference {
+            mergedFrontmatter.feishu?.pushReadOnlyReason = "表格或分栏内含飞书原生内容，请在飞书修改；本地可阅读和编辑，但暂不能推送"
+        }
 
         let updated = MarkdownEngine.ParsedDocument(
             frontmatter: mergedFrontmatter, body: parsedBody

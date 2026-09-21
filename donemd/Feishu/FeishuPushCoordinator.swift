@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// v2 Slice 9a-step1 (#50) — minimal happy-path Push.
 ///
@@ -25,6 +26,7 @@ import Foundation
 public final class FeishuPushCoordinator {
 
     public enum PushError: Error, Equatable {
+        case unsupportedContent(types: [String])
         /// Either `createDocument` failed, or `pushDocument` failed against
         /// an already-bound docToken (no orphan to clean up).
         case apiFailed(FeishuAPIError)
@@ -263,15 +265,20 @@ public final class FeishuPushCoordinator {
         /// a soft warning in the success dialog rather than aborting
         /// the whole push — content sync is the higher-value channel.
         public let titleSyncFailure: FeishuAPIError?
+        public let verificationPending: Bool
+        public let verificationMessage: String?
 
         public init(
             updatedDocument: MarkdownEngine.ParsedDocument,
             imageReport: FeishuImageUploadStage.Report? = nil,
-            titleSyncFailure: FeishuAPIError? = nil
+            titleSyncFailure: FeishuAPIError? = nil,
+            verificationMessage: String? = nil
         ) {
             self.updatedDocument = updatedDocument
             self.imageReport = imageReport
             self.titleSyncFailure = titleSyncFailure
+            self.verificationMessage = verificationMessage
+            self.verificationPending = verificationMessage != nil
         }
     }
 
@@ -289,6 +296,50 @@ public final class FeishuPushCoordinator {
         self.now = now
     }
 
+    /// Compare canonical supported content, not only top-level block counts.
+    /// Opaque Feishu-owned content is compared by identity, not mutable labels.
+    static func contentDigest(_ blocks: [FeishuBlock]) -> String {
+        let normalized = blocks.map { block -> FeishuBlock in
+            var copy = block
+            if case .placeholder(let payload) = block.payload {
+                copy.payload = .placeholder(.init(subtype: payload.subtype, title: "", url: ""))
+            }
+            return copy
+        }
+        let markdown = FeishuStructuralConverter.toMarkdown(normalized)
+        return SHA256.hash(data: Data(markdown.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func pushLimitations(_ document: MarkdownEngine.ParsedDocument) -> [String] {
+        var reasons = unsupportedContent(in: document.body)
+        if let reason = document.frontmatter.feishu?.pushReadOnlyReason {
+            reasons.append(reason)
+        }
+        func visit(_ node: TiptapNode, depth: Int) {
+            if node.type == "feishu_placeholder_block" && depth > 1 && !reasons.contains("嵌套飞书原生内容") { reasons.append("嵌套飞书原生内容") }
+            for child in node.content ?? [] { visit(child, depth: depth + 1) }
+        }
+        visit(document.body, depth: 0)
+        return reasons
+    }
+
+    /// The outbound converter must never silently discard an editor extension.
+    /// Shared with the document capability indicator; runs before any API call.
+    static func unsupportedContent(in node: TiptapNode) -> [String] {
+        let supported: Set<String> = ["doc", "paragraph", "heading", "blockquote", "codeBlock", "horizontalRule", "image", "bulletList", "orderedList", "taskList", "listItem", "taskItem", "callout", "table", "tableRow", "tableCell", "tableHeader", "feishu_placeholder_block", "text", "hardBreak", "video"]
+        let names = ["math_inline": "行内公式", "math_block": "公式块", "raw_markdown_block": "原文块（HTML 等）"]
+        var result: [String] = []
+        func visit(_ node: TiptapNode) {
+            if !supported.contains(node.type) {
+                let label = names[node.type] ?? "不支持的内容（\(node.type)）"
+                if !result.contains(label) { result.append(label) }
+            }
+            for child in node.content ?? [] { visit(child) }
+        }
+        visit(node)
+        return result
+    }
+
     public func push(
         _ document: MarkdownEngine.ParsedDocument,
         title: String,
@@ -297,6 +348,8 @@ public final class FeishuPushCoordinator {
         forceOverwrite: Bool = false,
         onProgress: ProgressCallback? = nil
     ) async throws -> PushResult {
+        let unsupported = Self.unsupportedContent(in: document.body)
+        guard unsupported.isEmpty else { throw PushError.unsupportedContent(types: unsupported) }
         // Step3.1 integrity check: frontmatter `placeholder_blocks` is the
         // authoritative manifest of which Feishu-only blocks the doc owns.
         // If the body has been hand-edited so its actual
@@ -557,6 +610,7 @@ public final class FeishuPushCoordinator {
                 pageBlockId: preflight.pageBlockId,
                 localSegments: segments,
                 remoteRanges: ranges,
+                remoteRootIDs: preflight.remoteRootChildIds,
                 signal: signal,
                 onProgress: onProgress
             )
@@ -579,52 +633,22 @@ public final class FeishuPushCoordinator {
             }
         }
 
-        // Layer 1 body-landing verification (GH #84 / #85). The push calls
-        // above returned without error, but "no error" is not "the body is
-        // on Feishu" — the #84 incident had pushDocument report success
-        // while the remote ended up with only a title and no body blocks.
-        // Re-read the remote tree and count its top-level (page-child)
-        // blocks against how many we meant to push. If we intended real
-        // content but the remote came back (near-)empty, refuse to mark
-        // this as a successful sync — otherwise the doc looks safely on
-        // Feishu and a later pull will copy the emptiness back over the
-        // user's local content.
-        //
-        // Best-effort: if the re-read itself fails (network blip), we do
-        // NOT block the push — we can't prove the body is missing, and a
-        // false alarm on every flaky re-read would be worse than the rare
-        // miss. We only raise when the re-read succeeds AND shows the body
-        // is suspiciously empty.
-        let intendedTopLevelBlocks = (blocks.first {
-            if case .page = $0.payload { return true } else { return false }
-        }?.children?.count) ?? 0
-        if intendedTopLevelBlocks >= 1 {
-            if let remoteBlocks = try? await apiClient.pullDocument(
-                documentId: docToken.rawValue
-            ).blocks {
-                let remoteTopLevel = remoteBlocks.first {
-                    if case .page = $0.payload { return true } else { return false }
-                }?.children?.count ?? 0
-                if Self.bodyLandedSuspiciouslyEmpty(
-                    intended: intendedTopLevelBlocks, remote: remoteTopLevel
-                ) {
-                    debugLog("[push] body verification FAILED: intended=\(intendedTopLevelBlocks) remote=\(remoteTopLevel)")
-                    throw PushError.bodyVerificationFailed(
-                        intendedBlocks: intendedTopLevelBlocks,
-                        remoteBlocks: remoteTopLevel,
-                        createdDocToken: createdInThisCall ? docToken : nil
-                    )
-                }
-                debugLog("[push] body verification OK: intended=\(intendedTopLevelBlocks) remote=\(remoteTopLevel)")
-            } else {
-                debugLog("[push] body verification skipped: re-read failed (network?), not blocking push")
+        let expectedDigest = Self.contentDigest(blocks)
+        var verificationMessage: String?
+        do {
+            let remote = try await apiClient.pullDocument(documentId: docToken.rawValue)
+            if Self.contentDigest(remote.blocks) != expectedDigest {
+                verificationMessage = "写入后核对发现正文不一致。请打开飞书检查或从版本历史恢复；不要拉取覆盖本地。"
             }
+        } catch {
+            verificationMessage = "正文写入请求已完成，但暂时无法回读核对。请使用「飞书 → 重新核对上次推送」重试核对，无需再次写入。"
         }
 
         var updatedFrontmatter = document.frontmatter
         var feishu = updatedFrontmatter.feishu ?? FeishuFrontmatter()
         feishu.docToken = docToken
-        feishu.lastPushedAt = now()
+        feishu.lastPushedAt = verificationMessage == nil ? now() : nil
+        feishu.verificationExpected = verificationMessage == nil ? nil : expectedDigest
         updatedFrontmatter.feishu = feishu
         if updatedFrontmatter.feishuOriginalIndex == nil {
             updatedFrontmatter.feishuOriginalIndex = updatedFrontmatter.userFields.count
@@ -638,7 +662,8 @@ public final class FeishuPushCoordinator {
         return PushResult(
             updatedDocument: updated,
             imageReport: imageReport,
-            titleSyncFailure: titleSyncFailure
+            titleSyncFailure: titleSyncFailure,
+            verificationMessage: verificationMessage
         )
     }
 
@@ -1014,12 +1039,15 @@ public final class FeishuPushCoordinator {
         pageBlockId: String,
         localSegments: [LocalSegment],
         remoteRanges: [(start: Int, end: Int)],
+        remoteRootIDs: [String],
         signal: FeishuSyncCancellationSignal?,
         onProgress: ProgressCallback?
     ) async throws {
         precondition(localSegments.count == remoteRanges.count,
             "segment count mismatch — preflight guarantees equal count")
 
+        // A later segment must not discover an encoding error after earlier writes.
+        for segment in localSegments { _ = try FeishuBlockEncoder.encodeDescendantBody(from: segment.blocks) }
         let total = localSegments.count
         var completed = 0
         // Iterate back-to-front; "segment N of M" UI counts up by
@@ -1039,49 +1067,32 @@ public final class FeishuPushCoordinator {
             let segment = localSegments[i]
             let range = remoteRanges[i]
 
-            if range.end > range.start {
-                do {
-                    try await apiClient.deleteChildrenRange(
-                        documentId: documentId,
-                        parentBlockId: pageBlockId,
-                        startIndex: range.start,
-                        endIndex: range.end
-                    )
-                } catch let apiError as FeishuAPIError {
-                    // Failure inside segmented loop = Feishu side
-                    // already has at least one segment deleted (this
-                    // one's range, if delete itself failed mid-flight,
-                    // PLUS every back-to-front segment that succeeded
-                    // before us). Surface as `.segmentFailed` so the
-                    // UI can route to a critical-style alert urging
-                    // the user to restore from Feishu history.
-                    throw PushError.segmentFailed(
-                        completedBefore: completed,
-                        totalSegments: total,
-                        attemptedSegmentIndex: completed + 1,
-                        underlying: apiError
-                    )
-                }
-            }
-
             do {
-                try await apiClient.insertChildrenAt(
-                    documentId: documentId,
-                    parentBlockId: pageBlockId,
-                    index: range.start,
-                    blocks: segment.blocks
-                )
+                // Append within this segment before removing its old range.
+                // Back-to-front processing keeps earlier anchor indices stable.
+                try await apiClient.insertChildrenAt(documentId: documentId,
+                    parentBlockId: pageBlockId, index: range.end, blocks: segment.blocks)
+                let newCount = segment.blocks.first { if case .page = $0.payload { return true }; return false }?.children?.count ?? 0
+                if newCount > 0 || range.end > range.start {
+                    var staged = try await apiClient.pullDocument(documentId: documentId).blocks
+                    guard let root = staged.firstIndex(where: { $0.blockId == pageBlockId }),
+                          let ids = staged[root].children,
+                          ids.count >= range.end + newCount,
+                          Array(ids[range.start..<range.end]) == Array(remoteRootIDs[range.start..<range.end]) else {
+                        throw FeishuAPIError.decodeFailed("分段写入未完整核对或远端结构已变化；当前段旧内容未删除。请在飞书检查并通过版本历史恢复，勿拉取覆盖本地。")
+                    }
+                    staged[root].children = Array(ids[range.end..<(range.end + newCount)])
+                    guard Self.contentDigest(staged) == Self.contentDigest(segment.blocks) else {
+                        throw FeishuAPIError.decodeFailed("新段内容核对不一致，当前段旧内容未删除。请在飞书检查或从版本历史恢复。")
+                    }
+                }
+                if range.end > range.start {
+                    try await apiClient.deleteChildrenRange(documentId: documentId,
+                        parentBlockId: pageBlockId, startIndex: range.start, endIndex: range.end)
+                }
             } catch let apiError as FeishuAPIError {
-                // Same recovery story as the delete-failure branch —
-                // delete already succeeded for this segment, so
-                // Feishu side is missing content this attempt was
-                // meant to put back.
-                throw PushError.segmentFailed(
-                    completedBefore: completed,
-                    totalSegments: total,
-                    attemptedSegmentIndex: completed + 1,
-                    underlying: apiError
-                )
+                throw PushError.segmentFailed(completedBefore: completed,
+                    totalSegments: total, attemptedSegmentIndex: completed + 1, underlying: apiError)
             }
             completed += 1
             onProgress?(.segmentFinished(index: completed, total: total))

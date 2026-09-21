@@ -2,11 +2,13 @@ import SwiftUI
 
 @main
 struct DonemdApp: App {
+    @ObservedObject private var editorMenu = EditorMenuState.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     /// Writing background theme (#80 S8). Same `@AppStorage` key the document
     /// root view reads, so picking from the 写作背景 menu re-tints every open
     /// window. Per-app, display-only — never touches `.md` disk (story 34).
+    @AppStorage("donemd.sourceVisible") private var sourceVisible = true
     @AppStorage("donemd.writingTheme") private var writingThemeRaw = WritingTheme.system.rawValue
 
     /// Forward a 格式-menu format command to the frontmost document's WebView.
@@ -112,7 +114,21 @@ struct DonemdApp: App {
                 //     checkmark trick failed in AppKit menus and put a check on
                 //     every row). Selecting re-tints every open window live;
                 //     display-only, never reaches `.md` disk (story 34).
+                CommandGroup(after: .textEditing) {
+                    Button("查找…") { runFormat("find") }
+                        .keyboardShortcut("f", modifiers: [.command])
+                }
+                CommandGroup(replacing: .undoRedo) {
+                    Button("撤销") { runFormat("undo") }
+                        .keyboardShortcut("z", modifiers: [.command])
+                        .disabled(!editorMenu.canUndo)
+                    Button("重做") { runFormat("redo") }
+                        .keyboardShortcut("z", modifiers: [.command, .shift])
+                        .disabled(!editorMenu.canRedo)
+                }
                 CommandGroup(after: .sidebar) {
+                    Toggle("显示 Markdown 源", isOn: $sourceVisible)
+                        .keyboardShortcut("m", modifiers: [.command, .control])
                     Button("显示文档大纲") {
                         // 方案 A: toggle only the frontmost document's per-window
                         // sidebar store, so other open windows are unaffected.
@@ -237,7 +253,8 @@ struct DonemdApp: App {
                     // fresh (≤10 min) pre-pull snapshot exists for the
                     // current document; restores it. Same currentDocument
                     // responder pattern as 重命名 above.
-                    Button("撤销上次拉取") {
+                    Button("重新核对上次推送") { FeishuPushCommand.run(verifyOnly: true) }
+                    Button("恢复拉取前版本…") {
                         FeishuUndoPullCommand.run()
                     }
                     .disabled(!FeishuUndoPullCommand.isAvailable(
@@ -258,5 +275,25 @@ struct DonemdApp: App {
                 // the system Settings panel under 飞书同步, accessible via
                 // ⌘, (Done.md → 设置).
             }
+    }
+}
+
+
+@MainActor
+final class EditorMenuState: ObservableObject {
+    static let shared = EditorMenuState()
+    @Published var canUndo = false
+    @Published var canRedo = false
+    private init() {
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            _ = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                DispatchQueue.main.async { Self.shared.refresh() }
+            }
+        }
+    }
+    func refresh() {
+        let doc = NSDocumentController.shared.currentDocument as? DonemdDocument
+        canUndo = doc?.editorCanUndo ?? false
+        canRedo = doc?.editorCanRedo ?? false
     }
 }

@@ -3,8 +3,7 @@ import { Plugin, PluginKey, NodeSelection } from '@tiptap/pm/state';
 import { dropPoint } from '@tiptap/pm/transform';
 import type { Node as PMNode, Slice } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
-import { headingFoldKey, applyFoldState } from './heading-fold';
-import { send } from './bridge';
+import { headingFoldKey } from './heading-fold';
 
 /**
  * 块拖拽手柄 (Block drag handle) — Feishu-style. Hovering a top-level block

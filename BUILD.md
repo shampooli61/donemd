@@ -62,6 +62,10 @@ xcodegen generate
 
 如果忘了走这条路、直接在 Xcode UI 里改了工程设置，下次 `xcodegen generate` 会覆盖你的改动——记得把改动反向写回 `project.yml`。
 
+## 发布验收
+
+`bash scripts/check.sh` 必须通过 TypeScript 类型检查、前端行为测试和 Swift 测试。正式归档脚本会先执行这一检查；公证续跑不重复测试。另需按 `docs/quality-1.1.0.md` 核对原生界面操作，不能以静态检查替代真机验收。
+
 ## 命令行 build & test
 
 ```bash

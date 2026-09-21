@@ -18,6 +18,41 @@ import XCTest
 ///   - progress UI / cancellation
 ///   - revision conflict detection
 final class FeishuPushCoordinatorTests: XCTestCase {
+    func testSegmentCreateAcknowledgedWithoutContentNeverDeletesOldRange() async throws {
+        let api = MockFeishuAPIClient()
+        api.skipSegmentInsert = true
+        api.pullDocumentResponse = feishuRootChildrenMixed(docToken: "doxc_BOUND", childIds: ["anchor", "old"], placeholderIds: ["anchor"])
+        let input = MarkdownEngine.ParsedDocument(frontmatter: makeBoundFrontmatter(docToken: "doxc_BOUND", placeholderIds: [("anchor", "sheet")]), body: TiptapNode(type: "doc", content: [placeholderNode(blockId: "anchor", title: "anchor", type: "sheet"), paragraphNode(text: "new")]))
+        do { _ = try await FeishuPushCoordinator(apiClient: api).push(input, title: "P"); XCTFail("must reject missing staged content") } catch {}
+        XCTAssertFalse(api.segmentedCalls.contains { if case .delete = $0 { return true }; return false })
+    }
+
+    func testFailedReadBackRetainsBindingButDoesNotClaimVerifiedSync() async throws {
+        let api = MockFeishuAPIClient()
+        api.pullDocumentError = .networkUnreachable("offline")
+        let input = MarkdownEngine.parseDocument(source: "需要核对的正文")
+        let result = try await FeishuPushCoordinator(apiClient: api).push(input, title: "核对")
+        XCTAssertTrue(result.verificationPending)
+        XCTAssertNotNil(result.updatedDocument.frontmatter.feishu?.docToken)
+        XCTAssertNil(result.updatedDocument.frontmatter.feishu?.lastPushedAt)
+    }
+
+    func testUnsupportedContentStopsBeforeAnyRemoteMutation() async throws {
+        for markdown in ["正文 $E=mc^2$ 结束", "正文\n\n$$\nE=mc^2\n$$", "正文\n\n<details>重要说明</details>"] {
+            let api = MockFeishuAPIClient()
+            let input = MarkdownEngine.parseDocument(source: markdown)
+            do {
+                _ = try await FeishuPushCoordinator(apiClient: api).push(input, title: "保真")
+                XCTFail("must refuse content loss before creating or changing a document")
+            } catch let error as FeishuPushCoordinator.PushError {
+                guard case .unsupportedContent(let types) = error else { return XCTFail("unexpected: \(error)") }
+                XCTAssertFalse(types.isEmpty)
+            }
+            XCTAssertTrue(api.createCalls.isEmpty)
+            XCTAssertTrue(api.pushCalls.isEmpty)
+        }
+    }
+
     func testNestedMediaStopsBeforeWriting() async throws {
         // Remote grids can flatten media to the local root; conversely a
         // local edit can move remote root media into a table. Neither shape
@@ -629,7 +664,7 @@ final class FeishuPushCoordinatorTests: XCTestCase {
         // Two pulls on the bound docToken: the placeholder-sequence
         // preflight, then the #84/#85 Layer-1 body-landing re-read that
         // verifies the pushed body isn't suspiciously empty on the remote.
-        XCTAssertEqual(api.pullCalls, ["doxc_BOUND", "doxc_BOUND"],
+        XCTAssertEqual(api.pullCalls, ["doxc_BOUND", "doxc_BOUND", "doxc_BOUND"],
             "preflight pull + post-push body-verification re-read")
         XCTAssertEqual(api.pushCalls.count, 0,
             "segmented push must NOT call legacy pushDocument (which nukes placeholders)")
@@ -639,8 +674,8 @@ final class FeishuPushCoordinatorTests: XCTestCase {
         //   leading seg [0,0) — empty local → no delete, no insert
         // So the only segmented calls are: delete[1..2), insert(idx=1).
         XCTAssertEqual(api.segmentedCalls, [
+            .insert(parentBlockId: "doxc_BOUND", index: 2, blockCount: 1),
             .delete(parentBlockId: "doxc_BOUND", startIndex: 1, endIndex: 2),
-            .insert(parentBlockId: "doxc_BOUND", index: 1, blockCount: 1),
         ])
     }
 
@@ -687,12 +722,12 @@ final class FeishuPushCoordinatorTests: XCTestCase {
         //   2. delete[3,4) + insert at 3 (1 block)
         //   3. delete[0,2) + insert at 0 (2 blocks)
         XCTAssertEqual(api.segmentedCalls, [
+            .insert(parentBlockId: "doxc_BOUND", index: 7, blockCount: 1),
             .delete(parentBlockId: "doxc_BOUND", startIndex: 5, endIndex: 7),
-            .insert(parentBlockId: "doxc_BOUND", index: 5, blockCount: 1),
+            .insert(parentBlockId: "doxc_BOUND", index: 4, blockCount: 1),
             .delete(parentBlockId: "doxc_BOUND", startIndex: 3, endIndex: 4),
-            .insert(parentBlockId: "doxc_BOUND", index: 3, blockCount: 1),
+            .insert(parentBlockId: "doxc_BOUND", index: 2, blockCount: 2),
             .delete(parentBlockId: "doxc_BOUND", startIndex: 0, endIndex: 2),
-            .insert(parentBlockId: "doxc_BOUND", index: 0, blockCount: 2),
         ])
         XCTAssertEqual(api.pushCalls.count, 0,
             "legacy pushDocument must not be called when segmented path runs")
@@ -1859,6 +1894,7 @@ final class MockFeishuAPIClient: FeishuAPIClient {
     /// When non-nil, `insertChildrenAt` throws this error on the next
     /// call (then clears it).
     var insertAtError: FeishuAPIError? = nil
+    var skipSegmentInsert = false
 
     enum SegmentedCall: Equatable {
         case delete(parentBlockId: String, startIndex: Int, endIndex: Int)
@@ -1971,6 +2007,11 @@ final class MockFeishuAPIClient: FeishuAPIClient {
             deleteRangeError = nil
             throw err
         }
+        var remote = remoteStateAfterPush ?? pullDocumentResponse
+        if let root = remote.firstIndex(where: { $0.blockId == parentBlockId }), var ids = remote[root].children, endIndex <= ids.count {
+            ids.removeSubrange(startIndex..<endIndex); remote[root].children = ids
+        }
+        remoteStateAfterPush = remote
     }
 
     func insertChildrenAt(
@@ -1993,6 +2034,22 @@ final class MockFeishuAPIClient: FeishuAPIClient {
         if let err = insertAtError {
             insertAtError = nil
             throw err
+        }
+        if !skipSegmentInsert {
+            var remote = remoteStateAfterPush ?? pullDocumentResponse
+            if let root = remote.firstIndex(where: { $0.blockId == parentBlockId }) {
+                let prefix = UUID().uuidString
+                let page = blocks.first { if case .page = $0.payload { return true }; return false }
+                var ids = remote[root].children ?? []
+                let newIDs = (page?.children ?? []).map { prefix + $0 }
+                ids.insert(contentsOf: newIDs, at: min(index, ids.count)); remote[root].children = ids
+                remote += blocks.filter { $0.blockId != page?.blockId }.map { node in
+                    var copy = node; copy.blockId = prefix + node.blockId
+                    copy.children = node.children?.map { prefix + $0 }
+                    return copy
+                }
+                remoteStateAfterPush = remote
+            }
         }
         afterInsertHook?()
     }

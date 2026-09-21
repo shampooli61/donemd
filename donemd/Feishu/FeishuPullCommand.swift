@@ -181,10 +181,14 @@ enum FeishuPullCommand {
                     }
                 }
 
+                guard document.parsedDocument == existing else {
+                    presentAlert(title: "文档在拉取期间发生了修改", message: "为保留你刚刚的修改，此次没有替换本地正文。请保存或另存为副本后重新拉取。")
+                    return
+                }
+
                 // Layer 2 — snapshot before overwrite so the pull is
-                // reversible for FeishuPullSnapshotStore.undoWindow. Best
-                // effort: a snapshot-save failure never blocks the pull,
-                // but we won't advertise "可撤销" if it didn't land.
+                // reversible for FeishuPullSnapshotStore.undoWindow.
+                // Backup failure must stop the overwrite.
                 var snapshotSaved = false
                 if let url = document.fileURL {
                     let priorMarkdown = MarkdownEngine.serialize(document: existing)
@@ -193,6 +197,10 @@ enum FeishuPullCommand {
                     )
                 }
 
+                guard snapshotSaved else {
+                    presentAlert(title: "备份未完成，已停止拉取", message: "无法保存覆盖前的恢复版本。请检查磁盘空间和文件权限，或先将本地内容另存为文件，再重试。此次没有替换本地正文。")
+                    return
+                }
                 document.applyUpdatedDocumentAndSave(result.updatedDocument) { persistError in
                     var lines: [String] = []
                     let revision = newRevision.map(String.init) ?? "?"
@@ -207,7 +215,7 @@ enum FeishuPullCommand {
                     switch persistError {
                     case nil:
                         if snapshotSaved {
-                            lines.append("↩️ 覆盖前已备份本地旧版本。10 分钟内可在「飞书」菜单 →「撤销上次拉取」还原。")
+                            lines.append("↩️ 覆盖前已备份本地旧版本。30 天内可在「飞书」菜单 →「恢复拉取前版本…」还原（保留最近 20 个版本）。")
                         }
                     case .untitled:
                         lines.append("⚠️ 当前文档没有保存路径，正文已写入内存但未落盘。请按 Cmd+S 保存。")
@@ -350,22 +358,12 @@ enum FeishuPullCommand {
     private static func unsavedChangesGate(document: DonemdDocument) -> GateOutcome {
         guard document.isDocumentEdited else { return .proceed }
 
-        // First-pull-prompt suppression: once the user has accepted the
-        // overwrite-on-pull semantics for this file (副本 or 丢弃), skip
-        // the dialog on every subsequent ⌘⌥O for the same path. Default
-        // becomes "discard local changes and pull" — equivalent to the
-        // 丢弃并拉取 button they implicitly chose by acknowledging the
-        // semantics earlier. Symmetric to FirstSavePromptCoordinator.
-        if !FirstPullPromptCoordinator.shared.shouldPrompt(forFileAt: document.fileURL) {
-            return .proceed
-        }
-
         let alert = NSAlert()
-        alert.messageText = "第一次从飞书拉取这份文档"
+        alert.messageText = "保留本地改动后再拉取"
         alert.informativeText = """
         从飞书拉取会用飞书侧的内容替换本地正文。当前还有未保存的改动，要怎么处理？
 
-        以后再拉取这份文档不再弹这个确认——除非你选「取消」。
+        每次拉取都会检查未保存改动，并在覆盖前保留恢复版本。
 
         • 「保存为副本」把当前正在编辑的版本写到同目录的 ~filename.local.md，然后继续拉取。
         • 「丢弃并拉取」直接覆盖本地正文。
@@ -388,16 +386,6 @@ enum FeishuPullCommand {
             outcome = .cancel
         }
 
-        // Mark prompted only when the user actually consented. 取消 means
-        // they backed out — the next ⌘⌥O should still ask. saveCopy
-        // failure (file write error) returns .cancel too; same logic
-        // applies — we never told the user "OK to overwrite from now on".
-        switch outcome {
-        case .proceed, .saveCopy:
-            FirstPullPromptCoordinator.shared.markPrompted(forFileAt: document.fileURL)
-        case .cancel:
-            break
-        }
         return outcome
     }
 

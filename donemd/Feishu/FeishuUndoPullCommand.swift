@@ -6,9 +6,9 @@ import AppKit
 /// A Feishu pull overwrites the local body with the remote content. Before
 /// doing so, `FeishuPullCommand` captures a snapshot via
 /// `FeishuPullSnapshotStore`. This command restores that snapshot, valid
-/// for `FeishuPullSnapshotStore.undoWindow` (10 minutes) after the pull.
+/// for `FeishuPullSnapshotStore.undoWindow` (30 days) after the pull.
 ///
-/// Wired into the 飞书 command menu as「撤销上次拉取」. The menu item stays
+/// Wired into the 飞书 command menu as「恢复拉取前版本…」. The menu item stays
 /// enabled only while a fresh snapshot exists for the current document —
 /// see `isAvailable(for:)`, which the menu binding consults.
 enum FeishuUndoPullCommand {
@@ -38,11 +38,25 @@ enum FeishuUndoPullCommand {
             )
             return
         }
-        guard let snapshot = FeishuPullSnapshotStore.latest(for: url) else {
-            presentAlert(
-                title: "没有可撤销的拉取",
-                message: "没有找到 10 分钟内的拉取备份——可能从未拉取，或撤销时限已过。"
-            )
+        let versions = FeishuPullSnapshotStore.history(for: url)
+        guard !versions.isEmpty else {
+            presentAlert(title: "没有可恢复的版本", message: "最近 30 天没有找到拉取前备份。")
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "恢复拉取前版本"
+        alert.informativeText = "恢复会替换当前正文。当前内容会先另存为恢复版本，之后仍可找回。"
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28))
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        for version in versions { picker.addItem(withTitle: "\(formatter.string(from: version.capturedAt)) · \(version.blockCount) 个内容块") }
+        alert.accessoryView = picker
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "恢复所选版本")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        let snapshot = versions[picker.indexOfSelectedItem]
+        guard FeishuPullSnapshotStore.save(markdown: MarkdownEngine.serialize(document: document.parsedDocument), for: url, blockCount: document.parsedDocument.body.content?.count ?? 0) else {
+            presentAlert(title: "无法备份当前内容", message: "恢复已停止，请检查磁盘空间和文件权限后重试。")
             return
         }
 
@@ -53,11 +67,9 @@ enum FeishuUndoPullCommand {
         document.applyUpdatedDocumentAndSave(restored) { persistError in
             switch persistError {
             case nil:
-                // One-shot: consume the snapshot so a second undo can't
-                // re-restore stale content on top of newer edits.
-                FeishuPullSnapshotStore.clear(for: url)
+                // Keep both the selected version and the just-saved current version.
                 presentAlert(
-                    title: "已撤销上次拉取",
+                    title: "已恢复所选版本",
                     message: "已还原到拉取前的本地版本（\(snapshot.blockCount) 个内容块）。"
                 )
             case .untitled:
