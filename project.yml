@@ -222,6 +222,71 @@ targets:
           CODE_SIGNING_ALLOWED: YES
           DEVELOPMENT_TEAM: ""
 
+  donemdIOS:
+    preBuildScripts:
+      - script: |
+          set -e
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/web"
+          if [ ! -d node_modules ]; then npm ci; fi
+          npm run build
+        name: Build Web Bundle
+        basedOnDependencyAnalysis: false
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - donemdIOS
+      - donemd/MarkdownEngine
+      - donemd/Assets/AssetsManager.swift
+      - donemd/Bridge/AssetURLSchemeHandler.swift
+      - path: Resources/Web
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: swift-markdown
+        product: Markdown
+      - package: Yams
+        product: Yams
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.ios
+        PRODUCT_NAME: donemdIOS
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: donemdIOS/Info.plist
+      properties:
+        CFBundleDisplayName: 马上做完
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportsDocumentBrowser: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Markdown Document
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [net.daringfireball.markdown, public.plain-text]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: net.daringfireball.markdown
+            UTTypeConformsTo: [public.plain-text]
+            UTTypeTagSpecification:
+              public.filename-extension: [md, markdown]
+  donemdIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [donemdIOSTests]
+    dependencies:
+      - target: donemdIOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.ios.tests
+
 schemes:
   donemd:
     build:
@@ -236,3 +301,12 @@ schemes:
         - donemdTests
     archive:
       config: Release
+
+  donemdIOS:
+    build:
+      targets:
+        donemdIOS: all
+        donemdIOSTests: [test]
+    test:
+      config: Debug
+      targets: [donemdIOSTests]

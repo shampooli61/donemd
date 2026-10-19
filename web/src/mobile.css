@@ -1,0 +1,10 @@
+html, body { width: 100%; min-height: 100%; margin: 0; overflow-x: hidden; }
+body { -webkit-text-size-adjust: 100%; }
+#editor { padding: 20px 18px 100px; max-width: 840px; margin: auto; }
+.ProseMirror { min-height: 65vh; font-size: 17px; line-height: 1.75; overflow-wrap: anywhere; }
+.ProseMirror table { min-width: 320px; }
+.ProseMirror .tableWrapper { overflow-x: auto; }
+.ProseMirror pre { overflow-x: auto; }
+button, input, select { min-height: 44px; font-size: 16px; }
+dialog { max-width: calc(100vw - 32px); max-height: 85dvh; overflow: auto; border: 1px solid #8885; border-radius: 16px; }
+dialog textarea { width: 100%; min-height: 180px; box-sizing: border-box; font-size: 16px; }
