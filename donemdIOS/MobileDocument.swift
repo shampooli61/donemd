@@ -15,6 +15,7 @@ final class MobileDocument: UIDocument, ObservableObject {
     var composing = false
     var flushEditor: (() async -> Bool)?
     private var saving = false
+    private var writtenSnapshot: String?
     func applyEditorSnapshot(_ body: TiptapNode, revision: Int) -> Bool {
         guard revision == self.revision else { return false }
         replaceBody(body)
@@ -93,6 +94,7 @@ final class MobileDocument: UIDocument, ObservableObject {
         } catch { message = "保留冲突失败，未解除冲突：\(error.localizedDescription)" }
     }
     private var original = ""
+    private var originalCanonical = ""
     private var parsed = MarkdownEngine.parseDocument(source: "")
     private var normalizationAccepted = false
     private var saveTask: Task<Void, Never>?
@@ -116,6 +118,7 @@ final class MobileDocument: UIDocument, ObservableObject {
         original = text
         conflict = false
         parsed = MarkdownEngine.parseDocument(source: text)
+        originalCanonical = MarkdownEngine.serialize(document: parsed)
         source = text
         normalizationAccepted = false
         needsNormalization = false
@@ -125,6 +128,7 @@ final class MobileDocument: UIDocument, ObservableObject {
 
     override func contents(forType typeName: String) throws -> Any {
         guard !needsNormalization, !conflict else { throw CocoaError(.userCancelled) }
+        writtenSnapshot = source
         return Data(source.utf8)
     }
 
@@ -135,11 +139,27 @@ final class MobileDocument: UIDocument, ObservableObject {
 
     func replaceBody(_ body: TiptapNode) {
         guard body != parsed.body else { return }
-        if !normalizationAccepted && MarkdownEngine.serialize(document: parsed) != original {
+        let previousCanonical = MarkdownEngine.serialize(document: parsed)
+        var next = parsed
+        next.body = body
+        let nextCanonical = MarkdownEngine.serialize(document: next)
+        // Tiptap adds default attributes on load. These aren't user edits and must
+        // never normalize an opened file merely because we flushed the WebView.
+        guard nextCanonical != previousCanonical else { parsed = next; return }
+        if nextCanonical == originalCanonical {
+            saveTask?.cancel()
+            parsed = next
+            source = original
+            needsNormalization = false
+            updateChangeCount(saving ? .done : .cleared)
+            message = "与已保存版本一致"
+            return
+        }
+        if !normalizationAccepted && originalCanonical != original {
             needsNormalization = true
         }
-        parsed.body = body
-        source = MarkdownEngine.serialize(document: parsed)
+        parsed = next
+        source = nextCanonical
         updateChangeCount(.done)
         do {
             try DocumentRecoveryStore.save(source, for: fileURL, reason: "最近编辑草稿", draft: true)
@@ -186,8 +206,22 @@ final class MobileDocument: UIDocument, ObservableObject {
         let snapshot = source
         do { try DocumentRecoveryStore.save(original, for: fileURL, reason: "保存前版本") }
         catch { message = "备份失败，未覆盖原文件：\(error.localizedDescription)"; return false }
+        writtenSnapshot = nil
         let success = await save(to: fileURL, for: .forOverwriting)
-        if success { original = snapshot }
+        if success {
+            let written = writtenSnapshot ?? snapshot
+            original = written
+            originalCanonical = MarkdownEngine.serialize(document: MarkdownEngine.parseDocument(source: written))
+            if source != written {
+                updateChangeCount(.done)
+                saveTask?.cancel()
+                saveTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(700))
+                    guard !Task.isCancelled, let self else { return }
+                    _ = await self.saveNow()
+                }
+            }
+        }
         message = success ? (hasUnsavedChanges ? "有新的未保存修改" : "已保存到本机 · iCloud 由系统同步") : "保存失败，可重试"
         return success && !hasUnsavedChanges
     }

@@ -92,4 +92,46 @@ final class MobileDocumentTests: XCTestCase {
         XCTAssertEqual(document.source, "# New remote version\n")
     }
 
+    func testEditorDefaultAttributesDoNotTurnReadingIntoAnEdit() throws {
+        let document = MobileDocument(fileURL: URL(fileURLWithPath: "/tmp/default-attributes.md"))
+        let original = "Title\n=====\n"
+        try document.load(fromContents: Data(original.utf8), ofType: nil)
+        var loaded = document.body
+        loaded.content?[0].attrs?["id"] = .null
+        _ = document.applyEditorSnapshot(loaded, revision: document.revision)
+        XCTAssertEqual(document.source, original)
+        XCTAssertFalse(document.hasUnsavedChanges)
+        XCTAssertFalse(document.needsNormalization)
+    }
+
+    func testSuccessiveEditsOfCanonicalFileDoNotAskForNormalization() throws {
+        let document = MobileDocument(fileURL: URL(fileURLWithPath: "/tmp/canonical-typing.md"))
+        let original = MarkdownEngine.serialize(document: MarkdownEngine.parse(markdown: "# Canonical"))
+        try document.load(fromContents: Data(original.utf8), ofType: nil)
+        document.replaceBody(MarkdownEngine.parse(markdown: "# First edit"))
+        document.replaceBody(MarkdownEngine.parse(markdown: "# Second edit"))
+        XCTAssertFalse(document.needsNormalization)
+        document.replaceBody(MarkdownEngine.parse(markdown: original))
+        XCTAssertEqual(document.source, original)
+        XCTAssertFalse(document.hasUnsavedChanges)
+    }
+
+    func testTypingDuringSavePersistsLatestContentWithoutFalseConflict() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".md")
+        try "# Initial\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = MobileDocument(fileURL: url)
+        _ = await document.open()
+        document.acceptNormalization()
+        document.replaceBody(MarkdownEngine.parse(markdown: "# First edit"))
+        let saving = Task { await document.saveNow() }
+        await Task.yield()
+        document.replaceBody(MarkdownEngine.parse(markdown: "# Latest edit"))
+        _ = await saving.value
+        _ = await document.saveNow()
+        XCTAssertFalse(document.conflict)
+        XCTAssertTrue(try String(contentsOf: url, encoding: .utf8).contains("Latest edit"))
+        _ = await document.close()
+    }
+
 }
