@@ -16,6 +16,7 @@ import { RawMarkdownBlock } from './raw-markdown-block';
 import { FeishuPlaceholderBlock } from './feishu-placeholder-block';
 import { Callout } from './callout';
 import { on, send } from './bridge';
+import { attachRichControls } from './mobile-rich-controls';
 import { attachWritingControls } from './mobile-controls';
 import './visual.css';
 import './mobile.css';
@@ -34,5 +35,6 @@ editor.view.dom.addEventListener('compositionend', () => setTimeout(() => send('
 on('loadDocument', payload => editor.commands.setContent(payload as object, false));
 on('setEditable', payload => editor.setEditable(Boolean(payload)));
 on('flush', () => send('documentChanged', editor.getJSON()));
-attachWritingControls(editor, () => {});
+const toolbar = attachWritingControls(editor, () => {});
+attachRichControls(editor, toolbar);
 send('editorReady');
