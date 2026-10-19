@@ -45,4 +45,33 @@ final class FolderStore: ObservableObject {
         try Data("# 未命名\n".utf8).write(to: url, options: .withoutOverwriting)
         return url
     }
+    func rename(_ source: URL, to name: String) throws -> URL {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != ".", trimmed != "..", !trimmed.contains("/"), !trimmed.contains("\\"), !trimmed.hasPrefix(".") else { throw CocoaError(.fileWriteInvalidFileName) }
+        let filename = ["md", "markdown"].contains((trimmed as NSString).pathExtension.lowercased()) ? trimmed : trimmed + ".md"
+        let target = source.deletingLastPathComponent().appendingPathComponent(filename)
+        if source == target { return source }
+        var coordinationError: NSError?, operationError: Error?
+        let coordinator = NSFileCoordinator()
+        coordinator.coordinate(writingItemAt: source, options: .forMoving, writingItemAt: target, options: [], error: &coordinationError) { old, new in
+            do {
+                guard !FileManager.default.fileExists(atPath: new.path) else { throw CocoaError(.fileWriteFileExists) }
+                coordinator.item(at: old, willMoveTo: new)
+                try FileManager.default.moveItem(at: old, to: new)
+                coordinator.item(at: old, didMoveTo: new)
+            } catch { operationError = error }
+        }
+        if let error = operationError ?? coordinationError { throw error }
+        return target
+    }
+    func duplicate(_ source: URL) throws -> URL {
+        let target = source.deletingLastPathComponent().appendingPathComponent(source.deletingPathExtension().lastPathComponent + " 副本 " + UUID().uuidString.prefix(6) + ".md")
+        var coordinationError: NSError?, operationError: Error?
+        NSFileCoordinator().coordinate(readingItemAt: source, options: [], writingItemAt: target, options: [], error: &coordinationError) { old, new in
+            do { try FileManager.default.copyItem(at: old, to: new) } catch { operationError = error }
+        }
+        if let error = operationError ?? coordinationError { throw error }
+        return target
+    }
+
 }

@@ -58,7 +58,7 @@ export const RawMarkdownBlock = Node.create({
       let dialog: HTMLDialogElement | undefined;
       const close = () => { dialog?.remove(); dialog = undefined; editor.commands.focus(); };
       edit.addEventListener('click', () => {
-        if (dialog) return;
+        if (dialog || !editor.isEditable) return;
         dialog = document.createElement('dialog'); dialog.className = 'donemd-raw-editor';
         dialog.setAttribute('aria-label', '编辑原文块');
         const title = document.createElement('h2'); title.textContent = '编辑原文';

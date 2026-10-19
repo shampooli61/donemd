@@ -21,7 +21,12 @@ struct MobileWebView: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {
+        if let command = document.outgoing, command.id != context.coordinator.lastCommand, context.coordinator.ready {
+            context.coordinator.lastCommand = command.id
+            context.coordinator.send(command.type, command.payload)
+        }
         if context.coordinator.revision != document.revision { context.coordinator.load() }
+        if context.coordinator.ready { context.coordinator.send("documentInfo", ["source": document.source, "identity": document.fileURL.path]) }
     }
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: "donemd")
@@ -30,6 +35,7 @@ struct MobileWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let document: MobileDocument
         weak var webView: WKWebView?
+        var lastCommand: UUID?
         var ready = false
         var revision = -1
         init(_ document: MobileDocument) { self.document = document }
@@ -43,12 +49,18 @@ struct MobileWebView: UIViewRepresentable {
                   let payload = try? JSONSerialization.jsonObject(with: data) else { return }
             revision = document.revision
             send("loadDocument", payload)
+            send("documentInfo", ["source": document.source, "identity": document.fileURL.path])
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame, let text = message.body as? String,
                   let data = text.data(using: .utf8),
                   let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   envelope["version"] as? Int == 1, let type = envelope["type"] as? String else { return }
+            if type == "previewImage", let payload = envelope["payload"] as? [String: String],
+               let src = payload["src"], let url = URL(string: src), let name = AssetURLSchemeHandler.filename(from: url) {
+                if let file = document.assets.storedFileURL(forFilename: name) { document.previewURL = file }
+                else { document.message = "附件尚未下载或已丢失，请在文件 App 下载后重试。" }
+            }
             if type == "editorReady" { ready = true; load() }
             if type == "documentChanged", let payload = envelope["payload"],
                let bodyData = try? JSONSerialization.data(withJSONObject: payload),

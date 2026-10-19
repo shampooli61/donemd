@@ -21,6 +21,9 @@ settings:
     CURRENT_PROJECT_VERSION: "7"
 
 packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: 0.9.19
   swift-markdown:
     url: https://github.com/swiftlang/swift-markdown
     from: 0.4.0
@@ -248,6 +251,8 @@ targets:
         product: Markdown
       - package: Yams
         product: Yams
+      - package: ZIPFoundation
+        product: ZIPFoundation
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.ios

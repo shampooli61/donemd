@@ -19,6 +19,8 @@ struct FolderView: View {
     @State private var opened: MobileDocument?
     @State private var loading = false
     @State private var query = ""
+    @State private var renaming: URL?
+    @State private var newName = ""
     var current: URL? { folder ?? folders.root }
     var body: some View {
         List {
@@ -32,6 +34,11 @@ struct FolderView: View {
                     NavigationLink(url.lastPathComponent) { FolderView(folders: folders, folder: url) }
                 } else {
                     Button { open(url) } label: { Label(url.deletingPathExtension().lastPathComponent, systemImage: "doc.text") }
+                        .contextMenu {
+                            Button("重命名") { newName = url.deletingPathExtension().lastPathComponent; renaming = url }
+                            Button("创建副本") { do { _ = try folders.duplicate(url); reload() } catch { folders.error = error.localizedDescription } }
+                            ShareLink(item: url) { Text("分享 Markdown 文件") }
+                        }
                 }
             }
             if loading { ProgressView("正在打开文档…") }
@@ -55,6 +62,12 @@ struct FolderView: View {
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
             do { try folders.select(result.get()); reload() } catch { folders.error = error.localizedDescription }
         }
+        .alert("重命名文档", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("文档名称", text: $newName)
+            Button("取消", role: .cancel) { renaming = nil }
+            Button("确定") { if let url = renaming { do { _ = try folders.rename(url, to: newName); reload() } catch { folders.error = error.localizedDescription } }; renaming = nil }
+        }
+        .refreshable { reload() }
         .task { reload() }
         .onChange(of: folders.root) { _, _ in reload() }
         .fullScreenCover(item: $opened, onDismiss: { reload() }) { document in MobileEditorScreen(document: document) }
@@ -79,6 +92,10 @@ struct MobileEditorScreen: View {
     @ObservedObject var document: MobileDocument
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var phase
+    @State private var photos = false
+    @State private var mediaFiles = false
+    @State private var shareURL: URL?
+    @State private var sharing = false
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -89,6 +106,8 @@ struct MobileEditorScreen: View {
                         Button("允许规范化并保存") { document.acceptNormalization(); Task { _ = await document.saveNow() } }
                     }.font(.caption).padding()
                 }
+                if document.importing { ProgressView("正在导入附件…") }
+                if sharing { ProgressView("正在准备分享…") }
                 MobileWebView(document: document)
             }
             .navigationTitle(document.fileURL.deletingPathExtension().lastPathComponent)
@@ -102,9 +121,49 @@ struct MobileEditorScreen: View {
                         }
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) { Button("保存") { Task { _ = await document.saveNow() } } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("保存") { Task { _ = await document.saveNow() } }
+                        Button("分享 Markdown") { share(bundled: false) }
+                        Button("打包分享文档与附件") { share(bundled: true) }
+                        Button("从照片插入图片或视频") { photos = true }
+                        Button("从文件插入图片或视频") { mediaFiles = true }
+                    } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("文档操作") }
+                }
+            }
+            .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
+                if let url = shareURL { ShareSheet(url: url) }
+            }
+            .sheet(isPresented: $photos) { MediaPicker { result in
+                photos = false
+                switch result {
+                case .success(let url): Task { await document.importMedia(url, removeTemporary: true) }
+                case .failure(let error): document.message = error.localizedDescription
+                }
+            } }
+            .sheet(isPresented: Binding(get: { document.previewURL != nil }, set: { if !$0 { document.previewURL = nil } })) {
+                if let url = document.previewURL { MediaPreview(url: url) }
+            }
+            .fileImporter(isPresented: $mediaFiles, allowedContentTypes: [.image, .movie]) { result in
+                switch result {
+                case .success(let url): Task { await document.importMedia(url) }
+                case .failure(let error): document.message = error.localizedDescription
+                }
             }
             .onChange(of: phase) { _, phase in if phase != .active { Task { _ = await document.saveNow() } } }
         }
     }
+    func share(bundled: Bool) {
+        guard !sharing else { return }
+        sharing = true
+        Task { @MainActor in
+            defer { sharing = false }
+            guard await document.saveNow() else { return }
+            do {
+                let source = document.source, name = document.fileURL.lastPathComponent, assets = document.assets
+                shareURL = try await Task.detached { try DocumentShare.prepare(source: source, name: name, assets: assets, bundled: bundled) }.value
+            } catch { document.message = "分享失败：\(error.localizedDescription)" }
+        }
+    }
+
 }
