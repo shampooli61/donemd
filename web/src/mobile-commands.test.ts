@@ -23,3 +23,22 @@ it('moves a selected paragraph without losing content and can undo', () => {
   expect(editor.getText()).toBe('first\n\nsecond');
   editor.destroy();
 });
+
+it('loading an external version resets undo instead of restoring the old document', async () => {
+  const { loadMobileDocument } = await import('./mobile-document-session');
+  const editor = new Editor({ extensions: [StarterKit], content: '<p>old</p>' });
+  editor.commands.insertContent('draft ');
+  loadMobileDocument(editor, { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'remote' }] }] });
+  expect(editor.commands.undo()).toBe(false);
+  expect(editor.getText()).toBe('remote');
+  editor.destroy();
+});
+
+it('reading mode rejects document edits even from a custom node control', async () => {
+  const { MobileReadOnlyGuard } = await import('./mobile-readonly');
+  const editor = new Editor({ extensions: [StarterKit, MobileReadOnlyGuard], content: '<p>preserved</p>' });
+  editor.setEditable(false);
+  editor.commands.insertContent('unexpected');
+  expect(editor.getText()).toBe('preserved');
+  editor.destroy();
+});

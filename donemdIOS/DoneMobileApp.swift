@@ -54,6 +54,10 @@ struct FolderView: View {
                             do { let url = try folders.newDocument(in: current); reload(); open(url) }
                             catch { folders.error = error.localizedDescription }
                         }
+                        Button("下载文件夹供离线使用") {
+                            do { try folders.requestOfflineDownload(in: current); folders.error = "已向系统请求下载。请在文件 App 确认文档和附件已下载后再离线使用。" }
+                            catch { folders.error = error.localizedDescription }
+                        }
                         Button("刷新") { reload() }
                     }
                 } label: { Image(systemName: "plus.circle").accessibilityLabel("文件操作") }
@@ -96,10 +100,14 @@ struct MobileEditorScreen: View {
     @State private var mediaFiles = false
     @State private var shareURL: URL?
     @State private var sharing = false
+    @State private var recovery = false
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if let message = document.message { Text(message).font(.caption).padding(6) }
+                if let message = document.message { Text(message).font(.caption).padding(6).accessibilityIdentifier("document-status") }
+                if document.conflict {
+                    Button("保留所有版本并加载磁盘内容") { Task { await document.preserveConflictsAndReload() } }.padding()
+                }
                 if document.needsNormalization {
                     VStack {
                         Text("保存会将原文件统一为 Done.md 的 Markdown 写法。正文和元数据仍会保留。")
@@ -124,11 +132,26 @@ struct MobileEditorScreen: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("保存") { Task { _ = await document.saveNow() } }
+                        Button("恢复版本") { document.refreshRecovery(); recovery = true }
                         Button("分享 Markdown") { share(bundled: false) }
                         Button("打包分享文档与附件") { share(bundled: true) }
-                        Button("从照片插入图片或视频") { photos = true }
-                        Button("从文件插入图片或视频") { mediaFiles = true }
+                        Button("从照片插入图片或视频") { photos = true }.disabled(document.isReadOnly || document.importing)
+                        Button("从文件插入图片或视频") { mediaFiles = true }.disabled(document.isReadOnly || document.importing)
                     } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("文档操作") }
+                }
+            }
+            .sheet(isPresented: $recovery) {
+                NavigationStack {
+                    List(document.recoveryVersions) { version in
+                        VStack(alignment: .leading) {
+                            Text(version.date.formatted()).font(.headline)
+                            Text(version.reason)
+                            Text(String(version.markdown.prefix(300))).font(.caption)
+                            Button("载入此版本（先备份当前内容）") {
+                                do { try document.restore(version); recovery = false } catch { document.message = error.localizedDescription }
+                            }
+                        }
+                    }.navigationTitle("恢复版本").toolbar { Button("关闭") { recovery = false } }
                 }
             }
             .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {

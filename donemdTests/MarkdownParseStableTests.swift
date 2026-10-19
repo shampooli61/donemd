@@ -12,9 +12,8 @@ import XCTest
 /// that re-parses into a *different* tree (e.g. wrong escaping of
 /// backslashes, dropped attributes, list nesting drift).
 ///
-/// Run on the actual sample files in `samples/` so the invariant gets
-/// tested against real Markdown the user has been editing — not just
-/// hand-built fixtures.
+/// Public synthetic fixtures exercise composed documents; private samples are
+/// deliberately excluded from the public repository and are not test dependencies.
 final class MarkdownParseStableTests: XCTestCase {
 
     /// Synthetic inputs that exercise specific edge cases. Independent of
@@ -88,24 +87,16 @@ final class MarkdownParseStableTests: XCTestCase {
         }
     }
 
-    /// The real `samples/*.md` files in the repo — the same files the
-    /// user opens for verification. Catches issues a synthetic fixture
-    /// might miss because the actual content composes constructs in
-    /// ways we wouldn't think to invent.
-    ///
-    /// Note: `samples/gfm.md` is currently excluded — it contains
-    /// composed-mark patterns (adjacent text runs that share a mark
-    /// prefix) that the naive serializer doesn't round-trip cleanly.
-    /// Tracked: issue #21.
+    /// Tracked public fixtures, independent of private user documents.
     func testParseStableOnRepoSamples() throws {
         let samples = ["commonmark.md", "raw-blocks.md", "math-test.md"]
         for filename in samples {
             guard let url = sampleURL(filename) else {
-                XCTFail("could not locate samples/\(filename)")
+                XCTFail("could not locate public fixture \(filename)")
                 continue
             }
             let source = try String(contentsOf: url, encoding: .utf8)
-            assertParseStable(source, name: "samples/\(filename)")
+            assertParseStable(source, name: "public-fixture/\(filename)")
         }
     }
 
@@ -133,7 +124,7 @@ final class MarkdownParseStableTests: XCTestCase {
         )
     }
 
-    /// Find a `samples/<filename>` next to the project root. Resolved
+    /// Find a tracked public fixture relative to this test source. Resolved
     /// from `#filePath` (the test source location), going up to the
     /// project directory.
     private func sampleURL(_ filename: String) -> URL? {
@@ -142,7 +133,7 @@ final class MarkdownParseStableTests: XCTestCase {
             .deletingLastPathComponent()    // strip MarkdownParseStableTests.swift
             .deletingLastPathComponent()    // strip donemdTests/
         let url = projectRoot
-            .appendingPathComponent("samples", isDirectory: true)
+            .appendingPathComponent("donemdTests/Fixtures/Markdown", isDirectory: true)
             .appendingPathComponent(filename)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }

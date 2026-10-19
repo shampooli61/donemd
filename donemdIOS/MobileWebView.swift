@@ -48,7 +48,7 @@ struct MobileWebView: UIViewRepresentable {
             guard ready, let data = try? JSONEncoder().encode(document.body),
                   let payload = try? JSONSerialization.jsonObject(with: data) else { return }
             revision = document.revision
-            send("loadDocument", payload)
+            send("loadDocument", ["document": payload, "revision": document.revision])
             send("documentInfo", ["source": document.source, "identity": document.fileURL.path])
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -61,10 +61,28 @@ struct MobileWebView: UIViewRepresentable {
                 if let file = document.assets.storedFileURL(forFilename: name) { document.previewURL = file }
                 else { document.message = "附件尚未下载或已丢失，请在文件 App 下载后重试。" }
             }
-            if type == "editorReady" { ready = true; load() }
-            if type == "documentChanged", let payload = envelope["payload"],
-               let bodyData = try? JSONSerialization.data(withJSONObject: payload),
-               let body = try? JSONDecoder().decode(TiptapNode.self, from: bodyData) { document.replaceBody(body) }
+            if type == "compositionState" { document.composing = envelope["payload"] as? Bool ?? false }
+            if type == "editingMode", let payload = envelope["payload"] as? [String: Bool] { document.isReadOnly = !(payload["editable"] ?? true) }
+            if type == "editorReady" {
+                ready = true; load()
+                document.flushEditor = { [weak self] in
+                    guard let self, let webView = self.webView else { return false }
+                    return await withCheckedContinuation { continuation in
+                        webView.evaluateJavaScript("window.donemdMobileSnapshot()") { value, error in
+                            guard error == nil, let value = value as? [String: Any], value["composing"] as? Bool != true else { continuation.resume(returning: false); return }
+                            continuation.resume(returning: self.applySnapshot(value))
+                        }
+                    }
+                }
+            }
+            if type == "documentChanged", let payload = envelope["payload"] as? [String: Any] { _ = applySnapshot(payload) }
+        }
+        @discardableResult
+        func applySnapshot(_ payload: [String: Any]) -> Bool {
+            guard let revision = payload["revision"] as? Int, let bodyValue = payload["body"],
+                  let data = try? JSONSerialization.data(withJSONObject: bodyValue),
+                  let body = try? JSONDecoder().decode(TiptapNode.self, from: data) else { return false }
+            return document.applyEditorSnapshot(body, revision: revision)
         }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             if navigationAction.navigationType == .linkActivated {

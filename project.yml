@@ -242,6 +242,7 @@ targets:
       - donemdIOS
       - donemd/MarkdownEngine
       - donemd/Assets/AssetsManager.swift
+      - donemd/Save/DocumentRecoveryStore.swift
       - donemd/Bridge/AssetURLSchemeHandler.swift
       - path: Resources/Web
         type: folder
@@ -292,6 +293,19 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.ios.tests
 
+  donemdIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [donemdIOSUITests]
+    dependencies:
+      - target: donemdIOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.ios.uitests
+        TEST_TARGET_NAME: donemdIOS
+
 schemes:
   donemd:
     build:
@@ -312,6 +326,7 @@ schemes:
       targets:
         donemdIOS: all
         donemdIOSTests: [test]
+        donemdIOSUITests: [test]
     test:
       config: Debug
-      targets: [donemdIOSTests]
+      targets: [donemdIOSTests, donemdIOSUITests]

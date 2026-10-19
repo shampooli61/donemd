@@ -11,7 +11,18 @@ final class MobileDocument: UIDocument, ObservableObject {
     @Published var outgoing: (id: UUID, type: String, payload: [String: String])?
     @Published var previewURL: URL?
     @Published var importing = false
+    @Published var isReadOnly = false
+    var composing = false
+    var flushEditor: (() async -> Bool)?
+    private var saving = false
+    func applyEditorSnapshot(_ body: TiptapNode, revision: Int) -> Bool {
+        guard revision == self.revision else { return false }
+        replaceBody(body)
+        return true
+    }
     func importMedia(_ url: URL, removeTemporary: Bool = false) async {
+        guard !importing, !isReadOnly else { return }
+        let intendedRevision = revision
         let granted = url.startAccessingSecurityScopedResource()
         importing = true
         defer {
@@ -26,9 +37,60 @@ final class MobileDocument: UIDocument, ObservableObject {
             let imported = try await Task.detached {
                 try manager.importFile(at: url, mimeType: type.preferredMIMEType ?? "application/octet-stream")
             }.value
+            guard revision == intendedRevision else { message = "文档已收到新版本，附件已保留，请重新选择插入位置。"; return }
             outgoing = (UUID(), type.conforms(to: .movie) ? "insertVideo" : "insertImage", ["src": imported.assetURL.absoluteString])
             message = "附件已写入，正在插入正文"
         } catch { message = "附件导入失败：\(error.localizedDescription)。请重试，正文未插入引用。" }
+    }
+    @Published private(set) var conflict = false
+    @Published private(set) var recoveryVersions: [DocumentRecoveryStore.Version] = []
+    private var stateObserver: NSObjectProtocol?
+    override init(fileURL url: URL) {
+        super.init(fileURL: url)
+        stateObserver = NotificationCenter.default.addObserver(forName: UIDocument.stateChangedNotification, object: self, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.conflict = self.conflict || self.documentState.contains(.inConflict)
+            if self.conflict { self.message = "存在多个版本，请先保留并处理冲突。" }
+        }
+    }
+    deinit {
+        if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
+        saveTask?.cancel()
+    }
+    func refreshRecovery() { recoveryVersions = (try? DocumentRecoveryStore.versions(for: fileURL)) ?? [] }
+    func restore(_ version: DocumentRecoveryStore.Version) throws {
+        saveTask?.cancel()
+        try DocumentRecoveryStore.save(source, for: fileURL, reason: "恢复前的正文")
+        parsed = MarkdownEngine.parseDocument(source: version.markdown)
+        source = version.markdown
+        acceptNormalization()
+        updateChangeCount(.done)
+        revision += 1
+        refreshRecovery()
+        message = "已载入恢复版本，请保存"
+    }
+    /// Preserve every participant before resolving system versions. Copies share the original assets directory.
+    func preserveConflictsAndReload() async {
+        do {
+            let versions = NSFileVersion.unresolvedConflictVersionsOfItem(at: fileURL) ?? []
+            let disk = try String(contentsOf: fileURL, encoding: .utf8)
+            var sources = [source, disk]
+            for version in versions { sources.append(try String(contentsOf: version.url, encoding: .utf8)) }
+            for content in Set(sources) {
+                try DocumentRecoveryStore.save(content, for: fileURL, reason: "冲突保护")
+                let copy = fileURL.deletingLastPathComponent().appendingPathComponent(fileURL.deletingPathExtension().lastPathComponent + " 冲突 " + UUID().uuidString.prefix(8) + ".md")
+                try Data(content.utf8).write(to: copy, options: .withoutOverwriting)
+            }
+            for version in versions { version.isResolved = true }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                revert(toContentsOf: fileURL) { success in
+                    self.conflict = !success
+                    self.message = success ? "已加载磁盘版本；各版本均保留为同目录冲突副本" : "重载失败；副本已保留，请重试"
+                    continuation.resume()
+                }
+            }
+            refreshRecovery()
+        } catch { message = "保留冲突失败，未解除冲突：\(error.localizedDescription)" }
     }
     private var original = ""
     private var parsed = MarkdownEngine.parseDocument(source: "")
@@ -41,16 +103,28 @@ final class MobileDocument: UIDocument, ObservableObject {
         guard let data = contents as? Data, let text = String(data: data, encoding: .utf8) else {
             throw CocoaError(.fileReadInapplicableStringEncoding)
         }
+        guard !composing else {
+            conflict = true
+            message = "输入中收到外部版本，请结束输入后处理冲突。"
+            throw CocoaError(.userCancelled)
+        }
+        saveTask?.cancel()
+        if hasUnsavedChanges && source != text {
+            try DocumentRecoveryStore.save(source, for: fileURL, reason: "外部更新前的未保存内容")
+            message = "收到外部更新；原有修改已保留，可在恢复版本中找回。"
+        }
         original = text
+        conflict = false
         parsed = MarkdownEngine.parseDocument(source: text)
         source = text
         normalizationAccepted = false
         needsNormalization = false
         revision += 1
+        refreshRecovery()
     }
 
     override func contents(forType typeName: String) throws -> Any {
-        guard !needsNormalization else { throw CocoaError(.userCancelled) }
+        guard !needsNormalization, !conflict else { throw CocoaError(.userCancelled) }
         return Data(source.utf8)
     }
 
@@ -67,6 +141,12 @@ final class MobileDocument: UIDocument, ObservableObject {
         parsed.body = body
         source = MarkdownEngine.serialize(document: parsed)
         updateChangeCount(.done)
+        do {
+            try DocumentRecoveryStore.save(source, for: fileURL, reason: "最近编辑草稿", draft: true)
+        } catch {
+            message = "恢复草稿写入失败：\(error.localizedDescription)，请立即保存"
+            return
+        }
         message = needsNormalization ? "保存前需确认 Markdown 格式规范化" : "有未保存修改"
         saveTask?.cancel()
         saveTask = Task { @MainActor [weak self] in
@@ -77,22 +157,46 @@ final class MobileDocument: UIDocument, ObservableObject {
     }
 
     func saveNow() async -> Bool {
+        guard !saving else { return false }
+        saving = true
+        defer { saving = false }
+        if let flushEditor, !(await flushEditor()) { message = "正在输入或编辑器尚未就绪，请稍后保存"; return false }
+        guard !composing else { message = "请先完成当前输入，再保存"; return false }
         guard !needsNormalization else { return false }
-        guard !documentState.contains(.inConflict) else {
+        guard !conflict, !documentState.contains(.inConflict) else {
             message = "存在冲突版本，请先保留并处理"
             return false
         }
         guard hasUnsavedChanges else { return true }
+        // UIDocument coordinates the actual write. Detect a disk change not yet delivered to its presenter.
+        do {
+            var disk: String?, readError: Error?, coordinationError: NSError?
+            NSFileCoordinator(filePresenter: self).coordinate(readingItemAt: fileURL, options: [], error: &coordinationError) { url in
+                do { disk = try String(contentsOf: url, encoding: .utf8) } catch { readError = error }
+            }
+            if let error = readError ?? coordinationError { throw error }
+            if let disk, disk != original, disk != source {
+                try DocumentRecoveryStore.save(source, for: fileURL, reason: "保存时发现外部更新")
+                conflict = true
+                message = "磁盘有新版本，已暂停保存。请保留并处理冲突。"
+                refreshRecovery()
+                return false
+            }
+        } catch { message = "无法核对磁盘版本，未覆盖原文件：\(error.localizedDescription)"; return false }
+        let snapshot = source
+        do { try DocumentRecoveryStore.save(original, for: fileURL, reason: "保存前版本") }
+        catch { message = "备份失败，未覆盖原文件：\(error.localizedDescription)"; return false }
         let success = await save(to: fileURL, for: .forOverwriting)
-        message = success ? "已保存到本机 · iCloud 由系统同步" : "保存失败，可重试"
-        return success
+        if success { original = snapshot }
+        message = success ? (hasUnsavedChanges ? "有新的未保存修改" : "已保存到本机 · iCloud 由系统同步") : "保存失败，可重试"
+        return success && !hasUnsavedChanges
     }
 
     override func autosave(completionHandler: ((Bool) -> Void)? = nil) {
-        guard !needsNormalization, !documentState.contains(.inConflict) else {
+        guard !needsNormalization, !conflict, !documentState.contains(.inConflict) else {
             completionHandler?(false); return
         }
-        super.autosave(completionHandler: completionHandler)
+        Task { @MainActor in completionHandler?(await saveNow()) }
     }
 
     override func handleError(_ error: Error, userInteractionPermitted: Bool) {

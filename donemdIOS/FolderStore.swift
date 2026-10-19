@@ -10,6 +10,18 @@ final class FolderStore: ObservableObject {
     private let key = "document-folder-bookmark"
 
     init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--uitest-fixture") {
+            let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("UI Test")
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let url = folder.appendingPathComponent("测试文档.md")
+                try "# 测试文档\n\n这里是手机写作测试。\n".write(to: url, atomically: true, encoding: .utf8)
+                root = folder
+            } catch { self.error = error.localizedDescription }
+            return
+        }
+        #endif
         guard let data = UserDefaults.standard.data(forKey: key) else { return }
         do {
             var stale = false
@@ -32,8 +44,8 @@ final class FolderStore: ObservableObject {
         }
     }
     func entries(in folder: URL) throws -> [URL] {
-        try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-            .filter { $0.lastPathComponent != "assets" && ((try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true || ["md", "markdown"].contains($0.pathExtension.lowercased())) }
+        try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles])
+            .filter { (try? $0.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true && $0.lastPathComponent != "assets" && ((try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true || ["md", "markdown"].contains($0.pathExtension.lowercased())) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
     func newDocument(in folder: URL) throws -> URL {
@@ -72,6 +84,16 @@ final class FolderStore: ObservableObject {
         }
         if let error = operationError ?? coordinationError { throw error }
         return target
+    }
+
+    func requestOfflineDownload(in folder: URL) throws {
+        let keys: [URLResourceKey] = [.isUbiquitousItemKey, .isSymbolicLinkKey]
+        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { throw CocoaError(.fileReadUnknown) }
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: Set(keys))
+            if values.isSymbolicLink == true { enumerator.skipDescendants(); continue }
+            if values.isUbiquitousItem == true { try FileManager.default.startDownloadingUbiquitousItem(at: url) }
+        }
     }
 
 }

@@ -4,7 +4,7 @@ import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { button, panel } from './mobile-controls';
 import { applyFoldState, headingFoldKey } from './heading-fold';
-import { on } from './bridge';
+import { on, send } from './bridge';
 
 export function attachReadingControls(editor: Editor, toolbar: HTMLElement) {
   let source = '', sourceView: EditorView | undefined, identity = '';
@@ -24,7 +24,8 @@ export function attachReadingControls(editor: Editor, toolbar: HTMLElement) {
   let reading = false;
   const mode = button('阅读', () => {
     reading = !reading; editor.setEditable(!reading); toolbar.hidden = reading;
-    document.body.classList.toggle('reading-mode', reading); mode.textContent = reading ? '编辑' : '阅读';
+    send('editingMode', { editable: !reading });
+    document.body.classList.toggle('reading-mode', reading); mode.textContent = reading ? '编辑' : '阅读'; mode.setAttribute('aria-label', mode.textContent);
     if (reading) editor.commands.blur();
   });
   bar.append(mode, button('源码', () => {
@@ -59,7 +60,7 @@ export function attachReadingControls(editor: Editor, toolbar: HTMLElement) {
     const text = editor.state.doc.textContent;
     const info = document.createElement('p'); info.textContent = `正文字符（不含空白）：${Array.from(text.replace(/\s/g, '')).length} · 源码 UTF-8：${new TextEncoder().encode(source).length} 字节`;
     dialog.append(info);
-    for (const [label, theme] of [['跟随系统', ''], ['纸质', 'paper'], ['赛博夜色', 'cyber']]) dialog.append(button(label, () => {
+    for (const [label, theme] of [['跟随系统', ''], ['纸质', 'paper'], ['赛博夜色', 'night']]) dialog.append(button(label, () => {
       document.documentElement.dataset.theme = theme; localStorage.setItem('mobile-theme', theme);
     }));
     for (const size of [15, 17, 19, 22, 26]) dialog.append(button(`${size} 号字`, () => {

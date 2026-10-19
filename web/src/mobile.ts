@@ -1,3 +1,6 @@
+import { MobileReadOnlyGuard } from './mobile-readonly';
+import { loadMobileDocument } from './mobile-document-session';
+import type { JSONContent } from '@tiptap/core';
 import { HeadingFold, applyFoldState, headingFoldKey } from './heading-fold';
 import { attachReadingControls } from './mobile-reading';
 import { NodeSelection } from '@tiptap/pm/state';
@@ -6,7 +9,7 @@ import { button, field, panel } from './mobile-controls';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
-import Table from '@tiptap/extension-table';
+import { MobileTable } from './mobile-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
@@ -26,10 +29,11 @@ import { attachWritingControls } from './mobile-controls';
 import './visual.css';
 import './mobile.css';
 
+let revision = 0;
 const editor = new Editor({
   element: document.querySelector('#editor') as HTMLElement,
-  extensions: [StarterKit.configure({ codeBlock: false }), Link.configure({ openOnClick: false }),
-    Table.configure({ resizable: false }), TableRow, TableCell, TableHeader, TaskList,
+  extensions: [MobileReadOnlyGuard, StarterKit.configure({ codeBlock: false }), Link.configure({ openOnClick: false }),
+    MobileTable.configure({ resizable: false }), TableRow, TableCell, TableHeader, TaskList,
     TaskItem.configure({ nested: true }), DonemdImage, DonemdVideo, MermaidCodeBlock,
     MathInline, MathBlock, RawMarkdownBlock, FeishuPlaceholderBlock, Callout,
     HeadingFold.configure({ onToggle: (index, collapse) => {
@@ -38,13 +42,22 @@ const editor = new Editor({
       applyFoldState(editor.view, [...folded]);
     } })],
   editorProps: { attributes: { 'aria-label': '文档正文', role: 'textbox', 'aria-multiline': 'true' } },
-  onUpdate: ({ editor }) => { if (!editor.view.composing) send('documentChanged', editor.getJSON()); },
+  onUpdate: ({ editor }) => { if (!editor.view.composing) send('documentChanged', { body: editor.getJSON(), revision }); },
 });
 // A composition commit may arrive after the final update; never reload during IME input.
-editor.view.dom.addEventListener('compositionend', () => setTimeout(() => send('documentChanged', editor.getJSON()), 0));
-on('loadDocument', payload => editor.commands.setContent(payload as object, false));
+editor.view.dom.addEventListener('compositionstart', () => send('compositionState', true));
+editor.view.dom.addEventListener('compositionend', () => setTimeout(() => {
+  send('compositionState', false);
+  send('documentChanged', { body: editor.getJSON(), revision });
+}, 0));
+on('loadDocument', payload => {
+  const next = payload as { document: JSONContent; revision: number };
+  loadMobileDocument(editor, next.document); revision = next.revision;
+});
+declare global { interface Window { donemdMobileSnapshot: () => { body: JSONContent; revision: number; composing: boolean } } }
+window.donemdMobileSnapshot = () => ({ body: editor.getJSON(), revision, composing: editor.view.composing });
 on('setEditable', payload => editor.setEditable(Boolean(payload)));
-on('flush', () => send('documentChanged', editor.getJSON()));
+on('flush', () => send('documentChanged', { body: editor.getJSON(), revision }));
 const toolbar = attachWritingControls(editor, index => {
   const folded = new Set(headingFoldKey.getState(editor.state)?.collapsed ?? []); folded.delete(index); applyFoldState(editor.view, [...folded]);
 });
