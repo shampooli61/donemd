@@ -25,4 +25,13 @@ final class MobileDocumentTests: XCTestCase {
         XCTAssertTrue(reopened.source.contains("- [x] 完成"))
         _ = await reopened.close()
     }
+    func testAttachmentReaderRejectsPathsOutsideAssets() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("private".utf8).write(to: folder.appendingPathComponent("outside.txt"))
+        let manager = AssetsManager(documentDirectoryProvider: { folder })
+        XCTAssertNil(manager.storedFileURL(forFilename: "../outside.txt"))
+    }
+
 }

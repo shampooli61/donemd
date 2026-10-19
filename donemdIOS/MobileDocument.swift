@@ -1,5 +1,6 @@
 import UIKit
 import Combine
+import UniformTypeIdentifiers
 
 /// Keeps the original bytes until an actual edit, including metadata unknown to this client.
 final class MobileDocument: UIDocument, ObservableObject {
@@ -7,6 +8,28 @@ final class MobileDocument: UIDocument, ObservableObject {
     @Published private(set) var revision = 0
     @Published var message: String?
     @Published private(set) var needsNormalization = false
+    @Published var outgoing: (id: UUID, type: String, payload: [String: String])?
+    @Published var previewURL: URL?
+    @Published var importing = false
+    func importMedia(_ url: URL, removeTemporary: Bool = false) async {
+        let granted = url.startAccessingSecurityScopedResource()
+        importing = true
+        defer {
+            importing = false
+            if granted { url.stopAccessingSecurityScopedResource() }
+            if removeTemporary { try? FileManager.default.removeItem(at: url) }
+        }
+        do {
+            let type = UTType(filenameExtension: url.pathExtension)
+            guard let type, type.conforms(to: .image) || type.conforms(to: .movie) else { throw CocoaError(.fileReadUnsupportedScheme) }
+            let manager = assets
+            let imported = try await Task.detached {
+                try manager.importFile(at: url, mimeType: type.preferredMIMEType ?? "application/octet-stream")
+            }.value
+            outgoing = (UUID(), type.conforms(to: .movie) ? "insertVideo" : "insertImage", ["src": imported.assetURL.absoluteString])
+            message = "附件已写入，正在插入正文"
+        } catch { message = "附件导入失败：\(error.localizedDescription)。请重试，正文未插入引用。" }
+    }
     private var original = ""
     private var parsed = MarkdownEngine.parseDocument(source: "")
     private var normalizationAccepted = false
