@@ -8,3 +8,11 @@ body { -webkit-text-size-adjust: 100%; }
 button, input, select { min-height: 44px; font-size: 16px; }
 dialog { max-width: calc(100vw - 32px); max-height: 85dvh; overflow: auto; border: 1px solid #8885; border-radius: 16px; }
 dialog textarea { width: 100%; min-height: 180px; box-sizing: border-box; font-size: 16px; }
+.mobile-toolbar { position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; display: flex; gap: 4px; overflow-x: auto; padding: 6px 8px max(6px, env(safe-area-inset-bottom)); background: Canvas; color: CanvasText; border-top: 1px solid #8885; }
+.mobile-toolbar button { flex: 0 0 auto; border: none; background: #8881; padding: 0 12px; border-radius: 8px; color: inherit; }
+.mobile-panel { background: Canvas; color: CanvasText; width: min(560px, calc(100vw - 40px)); padding: 16px; }
+.mobile-panel button { margin: 4px; padding: 6px 12px; }
+.mobile-panel input, .mobile-panel textarea, .mobile-panel select { display: block; margin: 12px 0; width: 100%; box-sizing: border-box; }
+.mobile-panel::backdrop { background: #0005; }
+.donemd-find { max-width: calc(100vw - 16px); flex-wrap: wrap; }
+.donemd-find input { min-width: 120px; }
