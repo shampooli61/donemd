@@ -267,7 +267,7 @@ targets:
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-        UISupportsDocumentBrowser: true
+        UISupportsDocumentBrowser: false
         LSSupportsOpeningDocumentsInPlace: true
         UIFileSharingEnabled: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
@@ -275,7 +275,7 @@ targets:
           - CFBundleTypeName: Markdown Document
             CFBundleTypeRole: Editor
             LSHandlerRank: Alternate
-            LSItemContentTypes: [net.daringfireball.markdown, public.plain-text]
+            LSItemContentTypes: [net.daringfireball.markdown]
         UTImportedTypeDeclarations:
           - UTTypeIdentifier: net.daringfireball.markdown
             UTTypeConformsTo: [public.plain-text]

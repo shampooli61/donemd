@@ -3,21 +3,36 @@ import UniformTypeIdentifiers
 
 @main
 struct DoneMobileApp: App {
-    @StateObject private var folders = FolderStore()
+    @StateObject private var folders: FolderStore
+    @StateObject private var session: DocumentOpenCoordinator
+    init() {
+        let folders = FolderStore()
+        _folders = StateObject(wrappedValue: folders)
+        _session = StateObject(wrappedValue: DocumentOpenCoordinator(folders: folders))
+    }
     var body: some Scene {
         WindowGroup {
             NavigationStack { FolderView(folders: folders, folder: nil) }
+                .environmentObject(session)
+                .onOpenURL { url in Task { await session.receiveExternal(url) } }
+                .fullScreenCover(item: $session.opened, onDismiss: {
+                    Task { await session.didDismiss() }
+                }) { document in
+                    MobileEditorScreen(document: document)
+                        .environmentObject(session)
+                        .interactiveDismissDisabled()
+                }
         }
     }
 }
 
 struct FolderView: View {
     @ObservedObject var folders: FolderStore
+    @EnvironmentObject private var session: DocumentOpenCoordinator
     let folder: URL?
     @State private var entries: [URL] = []
     @State private var choosing = false
-    @State private var opened: MobileDocument?
-    @State private var loading = false
+    @State private var authorizingExternal = false
     @State private var query = ""
     @State private var renaming: URL?
     @State private var newName = ""
@@ -29,6 +44,19 @@ struct FolderView: View {
                 Button("选择文档文件夹") { choosing = true }
             }
             if let error = folders.error { Text(error).foregroundStyle(.red) }
+            if let error = session.error { Text(error).foregroundStyle(.red) }
+            if let pending = session.pendingURL {
+                Section("来自文件 App") {
+                    Text(pending.lastPathComponent)
+                    if session.needsFolderAuthorization {
+                        Text("请选择此文档所在的文件夹，以便编辑原文件并访问相邻附件。")
+                        Button("选择文档所在文件夹") { authorizingExternal = true }
+                    } else {
+                        Button("重试打开文档") { Task { await session.openPending() } }
+                    }
+                    Button("取消打开", role: .cancel) { session.cancelPending() }
+                }.disabled(session.loading)
+            }
             ForEach(entries.filter { query.isEmpty || $0.lastPathComponent.localizedCaseInsensitiveContains(query) }, id: \.self) { url in
                 if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                     NavigationLink(url.lastPathComponent) { FolderView(folders: folders, folder: url) }
@@ -41,7 +69,7 @@ struct FolderView: View {
                         }
                 }
             }
-            if loading { ProgressView("正在打开文档…") }
+            if session.loading { ProgressView("正在打开文档…") }
         }
         .navigationTitle(current?.lastPathComponent ?? "马上做完")
         .searchable(text: $query, prompt: "按文件名查找")
@@ -66,6 +94,12 @@ struct FolderView: View {
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
             do { try folders.select(result.get()); reload() } catch { folders.error = error.localizedDescription }
         }
+        .fileImporter(isPresented: $authorizingExternal, allowedContentTypes: [.folder]) { result in
+            switch result {
+            case .success(let url): Task { await session.authorizePendingFolder(url); reload() }
+            case .failure(let error): session.error = "无法选择文件夹：\(error.localizedDescription)。请重试或取消打开。"
+            }
+        }
         .alert("重命名文档", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("文档名称", text: $newName)
             Button("取消", role: .cancel) { renaming = nil }
@@ -74,19 +108,14 @@ struct FolderView: View {
         .refreshable { reload() }
         .task { reload() }
         .onChange(of: folders.root) { _, _ in reload() }
-        .fullScreenCover(item: $opened, onDismiss: { reload() }) { document in MobileEditorScreen(document: document) }
+        .onChange(of: session.opened == nil) { _, closed in if closed { reload() } }
     }
     func reload() {
         guard let current else { return }
         do { entries = try folders.entries(in: current) } catch { folders.error = error.localizedDescription }
     }
     func open(_ url: URL) {
-        guard !loading else { return }; loading = true
-        Task { @MainActor in
-            let document = MobileDocument(fileURL: url)
-            if await document.open() { opened = document } else { folders.error = "无法打开。请确认文件已下载，再重试。" }
-            loading = false
-        }
+        Task { await session.open(url) }
     }
 }
 
@@ -94,6 +123,7 @@ extension MobileDocument: Identifiable { var id: URL { fileURL } }
 
 struct MobileEditorScreen: View {
     @ObservedObject var document: MobileDocument
+    @EnvironmentObject private var session: DocumentOpenCoordinator
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var phase
     @State private var photos = false
@@ -107,6 +137,14 @@ struct MobileEditorScreen: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                if let pending = session.pendingURL {
+                    VStack(alignment: .leading) {
+                        Text("待打开：" + pending.lastPathComponent).font(.headline)
+                        Text("请先保存并返回目录，再打开这份文档。")
+                        Button("取消待打开文档") { session.cancelPending() }
+                    }.font(.callout).padding()
+                }
+                if let error = session.error { Text(error).foregroundStyle(.red).font(.callout) }
                 if let message = document.message { Text(message).font(.caption).padding(6).accessibilityIdentifier("document-status") }
                 if document.conflict {
                     Button("保留所有版本并加载磁盘内容") { Task { await document.preserveConflictsAndReload() } }.padding()
