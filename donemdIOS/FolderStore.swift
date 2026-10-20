@@ -16,7 +16,10 @@ final class FolderStore: ObservableObject {
             do {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 let url = folder.appendingPathComponent("测试文档.md")
-                try "# 测试文档\n\n这里是手机写作测试。\n".write(to: url, atomically: true, encoding: .utf8)
+                let fixture = ProcessInfo.processInfo.arguments.contains("--uitest-noncanonical")
+                    ? "测试文档\n=======\n\n这里是手机写作测试。\n\n\n"
+                    : "# 测试文档\n\n这里是手机写作测试。\n"
+                try fixture.write(to: url, atomically: true, encoding: .utf8)
                 root = folder
             } catch { self.error = error.localizedDescription }
             return

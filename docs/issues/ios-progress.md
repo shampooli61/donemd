@@ -17,7 +17,7 @@ PRD：[ #104](https://github.com/shampooli61/donemd/issues/104)。开发 PR：[ 
 
 - `web/npm run check`：TypeScript 通过；11 个测试文件、45 项测试通过。
 - Web 生产构建：visual、markdown-source、mobile 三入口通过（iOS 构建前置步骤）。
-- iPhone 17 Pro / iOS Simulator 26.5：12 项文档/文件集成测试 + 1 项 UI 测试通过。
+- iPhone 17 Pro / iOS Simulator 26.5：12 项文档/文件集成测试 + 2 项 UI 测试通过（2026-10-20）。
 - iPad mini (A17 Pro) / iOS Simulator 26.5：同一 UI 流程测试通过。
 - UI 流程：打开样例 → 插入表格 → 查看只读源码 → 阅读模式隐藏写作入口 → 切回编辑 → 返回 → 重开。
 - Mac：582 项测试通过；首次运行发现公开快照缺少 3 个私有样例，现使用提交到仓库的公开合成夹具；没有导入私人文档。
@@ -30,3 +30,7 @@ PRD：[ #104](https://github.com/shampooli61/donemd/issues/104)。开发 PR：[ 
 - 仅访问用户选定目录；ZIP 分享不下载远程链接。原文块含无法安全枚举的附件引用时会阻止打包，提示通过文件 App 分享目录。
 - 冲突采用保留全部副本再加载磁盘版本；需要自己的版本时打开冲突副本或从恢复版本载入，不自动合并。
 - iOS 17+；Xcode 26.6 构建。已安装到 iPhone 15 Pro Max（iOS 27.2 Beta）；未配置或执行 App Store 发布。
+
+## 2026-10-20 #105 修复
+
+首次规范化确认入口放大；返回/主动保存需要确认时弹出对话框，取消继续编辑、确认执行原操作。UI 回归先失败后通过。真机手动交互复验尚待执行；未关闭 #105 或 #111。

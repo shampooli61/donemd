@@ -101,6 +101,9 @@ struct MobileEditorScreen: View {
     @State private var shareURL: URL?
     @State private var sharing = false
     @State private var recovery = false
+    @State private var saving = false
+    @State private var confirmingNormalization = false
+    @State private var returnAfterConfirmation = false
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -109,10 +112,18 @@ struct MobileEditorScreen: View {
                     Button("保留所有版本并加载磁盘内容") { Task { await document.preserveConflictsAndReload() } }.padding()
                 }
                 if document.needsNormalization {
-                    VStack {
-                        Text("保存会将原文件统一为 Done.md 的 Markdown 写法。正文和元数据仍会保留。")
-                        Button("允许规范化并保存") { document.acceptNormalization(); Task { _ = await document.saveNow() } }
-                    }.font(.caption).padding()
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("首次保存需要确认", systemImage: "info.circle").font(.headline)
+                        Text("保存会统一 Markdown 格式。请确认后保存，或继续编辑。")
+                            .font(.callout)
+                        Button("确认格式并保存") { requestSave(returnToList: false) }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .disabled(saving)
+                        Text("这是保存格式确认，不是 iCloud 同步开关。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                        .background(Color.accentColor.opacity(0.08))
                 }
                 if document.importing { ProgressView("正在导入附件…") }
                 if sharing { ProgressView("正在准备分享…") }
@@ -122,16 +133,12 @@ struct MobileEditorScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("返回") {
-                        Task {
-                            guard await document.saveNow() else { return }
-                            if await document.close() { dismiss() }
-                        }
-                    }
+                    Button("返回") { requestSave(returnToList: true) }
+                        .disabled(saving)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("保存") { Task { _ = await document.saveNow() } }
+                        Button("保存") { requestSave(returnToList: false) }.disabled(saving)
                         Button("恢复版本") { document.refreshRecovery(); recovery = true }
                         Button("分享 Markdown") { share(bundled: false) }
                         Button("打包分享文档与附件") { share(bundled: true) }
@@ -139,6 +146,15 @@ struct MobileEditorScreen: View {
                         Button("从文件插入图片或视频") { mediaFiles = true }.disabled(document.isReadOnly || document.importing)
                     } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("文档操作") }
                 }
+            }
+            .alert("确认首次保存", isPresented: $confirmingNormalization) {
+                Button(returnAfterConfirmation ? "保存并返回" : "确认并保存") {
+                    document.acceptNormalization()
+                    requestSave(returnToList: returnAfterConfirmation)
+                }
+                Button("继续编辑", role: .cancel) { }
+            } message: {
+                Text("首次保存会统一此文档的 Markdown 格式。确认后才会写入文件；选择继续编辑会保留当前内容。这不是 iCloud 同步授权。")
             }
             .sheet(isPresented: $recovery) {
                 NavigationStack {
@@ -176,6 +192,27 @@ struct MobileEditorScreen: View {
             .onChange(of: phase) { _, phase in if phase != .active { Task { _ = await document.saveNow() } } }
         }
     }
+    /// Only explicit save/return actions ask for consent; background autosave never presents a dialog.
+    func requestSave(returnToList: Bool) {
+        guard !saving else { return }
+        saving = true
+        Task { @MainActor in
+            defer { saving = false }
+            // Flush before deciding: the newest editor snapshot may introduce the first change.
+            guard await document.saveNow() else {
+                if document.needsNormalization {
+                    returnAfterConfirmation = returnToList
+                    confirmingNormalization = true
+                }
+                return
+            }
+            if returnToList {
+                if await document.close() { dismiss() }
+                else { document.message = "关闭文档失败，当前内容已保留，请重试。" }
+            }
+        }
+    }
+
     func share(bundled: Bool) {
         guard !sharing else { return }
         sharing = true
