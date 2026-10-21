@@ -18,3 +18,5 @@
 当前文档未返回目录时，外部请求不得替换编辑器；只保留一个待打开请求，重复请求合并，新的不同请求明确提示先处理原请求。保存并关闭后再打开待处理文件；取消待处理请求不会丢弃当前编辑。
 
 Apple 参考：[onOpenURL](https://developer.apple.com/documentation/swiftui/view/onopenurl(perform:))、[document browser 的 root view controller 要求](https://developer.apple.com/documentation/uikit/adding-a-document-browser-to-your-app)。
+
+2026-10-21 补充：所有文件夹选择入口统一经文档会话处理。有待打开的外部文件时，选择目录必须继续该请求；没有外部请求时仅切换浏览目录。目录授权界面说明系统“打开”按钮选择的是目录，完成后自动打开原文档。

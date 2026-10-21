@@ -32,7 +32,6 @@ struct FolderView: View {
     let folder: URL?
     @State private var entries: [URL] = []
     @State private var choosing = false
-    @State private var authorizingExternal = false
     @State private var query = ""
     @State private var renaming: URL?
     @State private var newName = ""
@@ -41,7 +40,9 @@ struct FolderView: View {
         List {
             if current == nil {
                 ContentUnavailableView("接着写你的文档", systemImage: "doc.text", description: Text("选择 iCloud Drive 中的文件夹，在 Mac 和手机上使用同一份 Markdown。"))
-                Button("选择文档文件夹") { choosing = true }
+                if session.pendingURL == nil {
+                    Button("选择文档文件夹") { choosing = true }
+                }
             }
             if let error = folders.error { Text(error).foregroundStyle(.red) }
             if let error = session.error { Text(error).foregroundStyle(.red) }
@@ -49,8 +50,8 @@ struct FolderView: View {
                 Section("来自文件 App") {
                     Text(pending.lastPathComponent)
                     if session.needsFolderAuthorization {
-                        Text("请选择此文档所在的文件夹，以便编辑原文件并访问相邻附件。")
-                        Button("选择文档所在文件夹") { authorizingExternal = true }
+                        Text("进入此文档所在的文件夹后，点右上角“打开”授予访问权限。完成后将自动打开这份文档，无需再次选择文件。")
+                        Button("选择文档所在文件夹") { choosing = true }
                     } else {
                         Button("重试打开文档") { Task { await session.openPending() } }
                     }
@@ -92,12 +93,9 @@ struct FolderView: View {
             }
         }
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
-            do { try folders.select(result.get()); reload() } catch { folders.error = error.localizedDescription }
-        }
-        .fileImporter(isPresented: $authorizingExternal, allowedContentTypes: [.folder]) { result in
             switch result {
-            case .success(let url): Task { await session.authorizePendingFolder(url); reload() }
-            case .failure(let error): session.error = "无法选择文件夹：\(error.localizedDescription)。请重试或取消打开。"
+            case .success(let url): Task { await session.selectFolder(url); reload() }
+            case .failure(let error): session.error = "无法选择文件夹：\(error.localizedDescription)。请重试。"
             }
         }
         .alert("重命名文档", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {

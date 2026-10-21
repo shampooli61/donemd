@@ -95,6 +95,16 @@ final class DocumentOpenCoordinator: ObservableObject {
         error = nil
     }
 
+    /// Every folder picker must resume an incoming document instead of only changing the list.
+    func selectFolder(_ folder: URL) async {
+        if pendingURL != nil {
+            await authorizePendingFolder(folder)
+            return
+        }
+        do { try folders.select(folder) }
+        catch { self.error = "文件夹授权失败：\(error.localizedDescription)" }
+    }
+
     func authorizePendingFolder(_ folder: URL) async {
         guard let file = pendingURL, activeDocument == nil, opened == nil, !loading else { return }
         guard folder.resolvingSymlinksInPath().standardizedFileURL == file.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL else {
