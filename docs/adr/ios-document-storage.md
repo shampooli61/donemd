@@ -20,3 +20,5 @@
 Apple 参考：[onOpenURL](https://developer.apple.com/documentation/swiftui/view/onopenurl(perform:))、[document browser 的 root view controller 要求](https://developer.apple.com/documentation/uikit/adding-a-document-browser-to-your-app)。
 
 2026-10-21 补充：所有文件夹选择入口统一经文档会话处理。有待打开的外部文件时，选择目录必须继续该请求；没有外部请求时仅切换浏览目录。目录授权界面说明系统“打开”按钮选择的是目录，完成后自动打开原文档。
+
+2026-10-22 补充：选择器声明的类型不是回调 URL 的验证依据。选择器回调收到 Markdown 文件时，复用外部文档接收流程，不执行目录枚举、不覆盖已有目录书签；未知目录仍需授权，重复及并发请求仍由同一会话保护。真实目录（包括扩展名为 .md 的目录）继续按目录处理。

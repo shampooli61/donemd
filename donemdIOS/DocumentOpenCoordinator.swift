@@ -97,6 +97,16 @@ final class DocumentOpenCoordinator: ObservableObject {
 
     /// Every folder picker must resume an incoming document instead of only changing the list.
     func selectFolder(_ folder: URL) async {
+        // Validate the delivered URL, not just the picker's requested content type.
+        // External file delivery must never attempt to enumerate a Markdown file as a directory.
+        let access = ScopedDocumentURL(folder)
+        defer { withExtendedLifetime(access) {} }
+        if folder.isFileURL,
+           ["md", "markdown"].contains(folder.pathExtension.lowercased()),
+           (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true {
+            await receiveExternal(folder)
+            return
+        }
         if pendingURL != nil {
             await authorizePendingFolder(folder)
             return
