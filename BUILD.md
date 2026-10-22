@@ -106,3 +106,23 @@ xcodebuild -project donemd.xcodeproj -scheme donemd test
 - Vite 用内容 hash 做增量缓存，没改时 ~50–100ms 退出
 - 输出：`Resources/Web/visual.html`（CSS + JS 全 inline 的单文件，~290 KB）
 - 这个文件以 folder reference 方式被打进 `.app/Contents/Resources/Web/`
+
+## iOS / iPadOS 文档端（开发中）
+
+- 最低 iOS/iPadOS 17；使用包含目标模拟器运行时的 Xcode。此次验证使用 Xcode 26.6 / iOS Simulator 26.5。
+- `xcodegen generate` 后选择 `donemdIOS` scheme。Web 构建同时生成 `mobile.html`；不直接编辑生成工程或 HTML。
+- 模拟器验证：
+
+```bash
+xcodebuild -project donemd.xcodeproj -scheme donemdIOS \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  CODE_SIGNING_ALLOWED=NO test
+```
+
+模拟器名称按 `xcrun simctl list devices available` 调整。单元测试覆盖保存、恢复、外部更新、文件及附件；UI 测试使用仅 Debug 可用的独立样例入口，不替代目录授权与真实 iCloud 验收。
+
+真机在 Xcode 中为 `donemdIOS` 选择自己的签名 Team。首次选择 iCloud Drive 文档文件夹；本项目通过系统目录授权访问用户文件，不配置专有 iCloud 容器。Mac 与 iPhone 要登录同一 Apple 账号并开启 iCloud Drive。免费账户可用，但文件和附件必须有足够空间且完成下载；“本机已保存”不表示另一设备已收到。
+
+媒体播放器依赖系统支持的格式；不转码。带附件分享使用 ZIPFoundation，生成包含正文及可识别本地引用附件的 ZIP；外链不下载，原文块中无法安全识别的附件引用会明确阻止打包。
+
+真机验收步骤及证据边界见 `docs/issues/ios-device-validation.md`。当前未配置 App Store 发布，也未自动安装到个人手机。

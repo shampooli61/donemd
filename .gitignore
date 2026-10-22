@@ -24,3 +24,4 @@ donemd-feishu-config.plist
 
 # Private development fixtures are not part of the public snapshot
 samples/
+donemdIOS/Info.plist
