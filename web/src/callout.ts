@@ -184,7 +184,9 @@ export const Callout = Node.create({
   // table / image / hr is rejected by ProseMirror's content expression
   // at edit time. Heading is allowed because Feishu callout accepts
   // h1-h6 as children (verified via feishu-mcp-pro syntax doc).
-  content: '(paragraph | heading | bulletList | orderedList | blockquote)+',
+  // taskList is an existing block node; mixed Markdown lists expand into
+  // sibling bulletList/taskList runs and must remain editable inside callouts.
+  content: '(paragraph | heading | bulletList | orderedList | taskList | blockquote)+',
   defining: true,
   // Treat callout as a structural boundary: selections can't cross it
   // and lift/clearNodes can't escape it. Without this, clicking 清除
