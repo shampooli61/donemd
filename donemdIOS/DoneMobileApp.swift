@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 @main
@@ -6,6 +7,12 @@ struct DoneMobileApp: App {
     @StateObject private var folders: FolderStore
     @StateObject private var session: DocumentOpenCoordinator
     init() {
+        #if DEBUG
+        // Explicit UI-test profile avoids simulator menu-animation idling; no behavior is bypassed.
+        if ProcessInfo.processInfo.arguments.contains("--uitest-no-animations") {
+            UIView.setAnimationsEnabled(false)
+        }
+        #endif
         let folders = FolderStore()
         _folders = StateObject(wrappedValue: folders)
         _session = StateObject(wrappedValue: DocumentOpenCoordinator(folders: folders))

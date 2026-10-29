@@ -40,7 +40,7 @@ final class MobileWritingUITests: XCTestCase {
 
     func testToolbarMenusAndRecoveryCloseRemainAccessible() {
         let app = XCUIApplication()
-        app.launchArguments = ["--uitest-fixture"]
+        app.launchArguments = ["--uitest-fixture", "--uitest-no-animations"]
         app.launch()
         let fileOperations = app.buttons["更多操作"]
         XCTAssertTrue(fileOperations.waitForExistence(timeout: 15))
@@ -64,7 +64,7 @@ final class MobileWritingUITests: XCTestCase {
 
     func testOpenInsertTableInspectReadOnlySourceAndReopen() {
         let app = XCUIApplication()
-        app.launchArguments = ["--uitest-fixture"]
+        app.launchArguments = ["--uitest-fixture", "--uitest-no-animations"]
         app.launch()
         let file = app.buttons["测试文档"]
         XCTAssertTrue(file.waitForExistence(timeout: 15)); file.tap()
@@ -93,7 +93,7 @@ final class MobileWritingUITests: XCTestCase {
 
     func testNativeFormatPanelCancelPreservesCurrentSource() {
         let app = XCUIApplication()
-        app.launchArguments = ["--uitest-fixture"]
+        app.launchArguments = ["--uitest-fixture", "--uitest-no-animations"]
         app.launch()
         let file = app.buttons["测试文档"]
         XCTAssertTrue(file.waitForExistence(timeout: 15)); file.tap(); waitForEditor(app)
@@ -114,7 +114,7 @@ final class MobileWritingUITests: XCTestCase {
 
     func testReturnRequestsNormalizationAndCancelKeepsDocumentOpen() {
         let app = XCUIApplication()
-        app.launchArguments = ["--uitest-fixture", "--uitest-noncanonical"]
+        app.launchArguments = ["--uitest-fixture", "--uitest-noncanonical", "--uitest-no-animations"]
         app.launch()
         let file = app.buttons["测试文档"]
         XCTAssertTrue(file.waitForExistence(timeout: 15)); file.tap(); waitForEditor(app)
