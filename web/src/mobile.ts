@@ -1,3 +1,4 @@
+import { attachMobileViewport } from './mobile-viewport';
 import { MobileReadOnlyGuard } from './mobile-readonly';
 import { loadMobileDocument } from './mobile-document-session';
 import type { JSONContent } from '@tiptap/core';
@@ -104,5 +105,6 @@ editor.view.dom.addEventListener('error', event => {
 }, true);
 
 attachReadingControls(editor, toolbar);
+attachMobileViewport(editor, toolbar);
 
 send('editorReady');

@@ -1,6 +1,41 @@
 import XCTest
 
 final class MobileWritingUITests: XCTestCase {
+    func testToolbarMenusAndRecoveryCloseRemainAccessible() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-fixture"]
+        app.launch()
+        let fileOperations = app.buttons["文件操作"]
+        XCTAssertTrue(fileOperations.waitForExistence(timeout: 15))
+        XCTAssertTrue(fileOperations.isHittable)
+        fileOperations.tap()
+        let refresh = app.buttons["刷新"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        refresh.tap()
+        let file = app.buttons["测试文档"]
+        XCTAssertTrue(file.waitForExistence(timeout: 10))
+        file.tap()
+        XCTAssertTrue(app.webViews.buttons["源码"].waitForExistence(timeout: 20))
+        let documentOperations = app.buttons["文档操作"]
+        XCTAssertTrue(documentOperations.waitForExistence(timeout: 15))
+        XCTAssertTrue(documentOperations.isHittable)
+        documentOperations.tap()
+        let recovery = app.buttons["恢复版本"]
+        XCTAssertTrue(recovery.waitForExistence(timeout: 5))
+        recovery.tap()
+        // Duo can expose the sheet's close control outside a NavigationBar.
+        // The recovery sheet is modal, so its Close button is the active match.
+        let close = app.buttons["关闭"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertTrue(close.isHittable)
+        close.tap()
+        let back = app.buttons["返回"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        XCTAssertTrue(back.isHittable)
+        back.tap()
+        XCTAssertTrue(file.waitForExistence(timeout: 10))
+    }
+
     func testOpenInsertTableInspectReadOnlySourceAndReopen() {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-fixture"]

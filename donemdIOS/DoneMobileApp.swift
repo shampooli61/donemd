@@ -89,7 +89,7 @@ struct FolderView: View {
                         }
                         Button("刷新") { reload() }
                     }
-                } label: { Image(systemName: "plus.circle").accessibilityLabel("文件操作") }
+                } label: { Label("文件操作", systemImage: "plus.circle") }
             }
         }
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
@@ -169,7 +169,9 @@ struct MobileEditorScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("返回") { requestSave(returnToList: true) }
+                    Button { requestSave(returnToList: true) } label: {
+                        Label("返回", systemImage: "chevron.backward")
+                    }
                         .disabled(saving)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -180,7 +182,7 @@ struct MobileEditorScreen: View {
                         Button("打包分享文档与附件") { share(bundled: true) }
                         Button("从照片插入图片或视频") { photos = true }.disabled(document.isReadOnly || document.importing)
                         Button("从文件插入图片或视频") { mediaFiles = true }.disabled(document.isReadOnly || document.importing)
-                    } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("文档操作") }
+                    } label: { Label("文档操作", systemImage: "ellipsis.circle") }
                 }
             }
             .alert("确认首次保存", isPresented: $confirmingNormalization) {
@@ -203,7 +205,11 @@ struct MobileEditorScreen: View {
                                 do { try document.restore(version); recovery = false } catch { document.message = error.localizedDescription }
                             }
                         }
-                    }.navigationTitle("恢复版本").toolbar { Button("关闭") { recovery = false } }
+                    }.navigationTitle("恢复版本").toolbar {
+                        Button { recovery = false } label: {
+                            Label("关闭", systemImage: "xmark")
+                        }
+                    }
                 }
             }
             .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {

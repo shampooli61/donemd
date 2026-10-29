@@ -76,12 +76,6 @@ export function attachWritingControls(editor: Editor, unfold: (ordinal: number) 
         button('全部替换', () => { status.textContent = `已替换 ${replaceMatches(editor, query.value, replacement.value, true)} 处，可撤销`; }), status);
       query.focus();
     }));
-  document.body.append(toolbar);
-  function position() {
-    const viewport = window.visualViewport;
-    toolbar.style.bottom = `${Math.max(0, window.innerHeight - (viewport?.height ?? window.innerHeight) - (viewport?.offsetTop ?? 0))}px`;
-  }
-  window.visualViewport?.addEventListener('resize', position);
-  window.visualViewport?.addEventListener('scroll', position);
+  document.querySelector('#mobile-viewport')!.append(toolbar);
   return toolbar;
 }

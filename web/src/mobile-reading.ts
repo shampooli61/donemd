@@ -7,6 +7,7 @@ import { applyFoldState, headingFoldKey } from './heading-fold';
 import { on, send } from './bridge';
 
 export function attachReadingControls(editor: Editor, toolbar: HTMLElement) {
+  const scroller = document.querySelector('#mobile-scroll') as HTMLElement;
   let source = '', sourceView: EditorView | undefined, identity = '';
   on('documentInfo', payload => {
     const info = payload as { source: string; identity: string };
@@ -15,11 +16,11 @@ export function attachReadingControls(editor: Editor, toolbar: HTMLElement) {
     if (identity !== info.identity) {
       identity = info.identity;
       const previous = Number(localStorage.getItem('position:' + identity) ?? 0);
-      setTimeout(() => window.scrollTo(0, previous), 250);
+      setTimeout(() => scroller.scrollTop = previous, 250);
     }
   });
   let timer: ReturnType<typeof setTimeout>;
-  window.addEventListener('scroll', () => { clearTimeout(timer); timer = setTimeout(() => { if (identity) localStorage.setItem('position:' + identity, String(window.scrollY)); }, 250); });
+  scroller.addEventListener('scroll', () => { clearTimeout(timer); timer = setTimeout(() => { if (identity) localStorage.setItem('position:' + identity, String(scroller.scrollTop)); }, 250); });
   const bar = document.createElement('nav'); bar.className = 'mobile-reading'; bar.setAttribute('aria-label', '阅读与导航');
   let reading = false;
   const mode = button('阅读', () => {
@@ -67,7 +68,7 @@ export function attachReadingControls(editor: Editor, toolbar: HTMLElement) {
       editor.view.dom.style.fontSize = `${size}px`; localStorage.setItem('mobile-font', String(size));
     }));
   }));
-  document.body.prepend(bar);
+  document.querySelector('#mobile-viewport')!.prepend(bar);
   document.documentElement.dataset.theme = localStorage.getItem('mobile-theme') ?? '';
   editor.view.dom.style.fontSize = `${Number(localStorage.getItem('mobile-font') ?? 17)}px`;
 }
