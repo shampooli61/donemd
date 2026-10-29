@@ -77,7 +77,7 @@ final class MobileDocumentTests: XCTestCase {
         XCTAssertFalse(saved)
         XCTAssertTrue(document.conflict)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# External\n")
-        await document.preserveConflictsAndReload()
+        try await document.preserveConflictsAndReload()
         XCTAssertFalse(document.conflict)
         _ = await document.close()
     }

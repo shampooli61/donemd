@@ -1,3 +1,4 @@
+import { createSnapshotProtection } from './mobile-snapshot-protection';
 import { attachMobileViewport } from './mobile-viewport';
 import { MobileReadOnlyGuard } from './mobile-readonly';
 import { loadMobileDocument } from './mobile-document-session';
@@ -31,6 +32,8 @@ import './visual.css';
 import './mobile.css';
 
 let revision = 0;
+let snapshotSequence = 0;
+const snapshot = (current: Editor) => ({ body: current.getJSON(), revision, composing: current.view.composing, sequence: ++snapshotSequence });
 const editor = new Editor({
   element: document.querySelector('#editor') as HTMLElement,
   extensions: [MobileReadOnlyGuard, StarterKit.configure({ codeBlock: false }), Link.configure({ openOnClick: false }),
@@ -43,22 +46,24 @@ const editor = new Editor({
       applyFoldState(editor.view, [...folded]);
     } })],
   editorProps: { attributes: { 'aria-label': '文档正文', role: 'textbox', 'aria-multiline': 'true' } },
-  onUpdate: ({ editor }) => { if (!editor.view.composing) send('documentChanged', { body: editor.getJSON(), revision }); },
+  onUpdate: ({ editor }) => { if (!editor.view.composing) send('documentChanged', snapshot(editor)); },
 });
+window.donemdMobileProtection = createSnapshotProtection(editor, () => revision, value => { revision = value; }, () => ++snapshotSequence);
 // A composition commit may arrive after the final update; never reload during IME input.
 editor.view.dom.addEventListener('compositionstart', () => send('compositionState', true));
 editor.view.dom.addEventListener('compositionend', () => setTimeout(() => {
   send('compositionState', false);
-  send('documentChanged', { body: editor.getJSON(), revision });
+  send('documentChanged', snapshot(editor));
 }, 0));
 on('loadDocument', payload => {
+  if (window.donemdMobileProtection.isLocked()) return; // A queued ordinary load cannot bypass the replacement lock.
   const next = payload as { document: JSONContent; revision: number };
   loadMobileDocument(editor, next.document); revision = next.revision;
 });
 declare global { interface Window { donemdMobileSnapshot: () => { body: JSONContent; revision: number; composing: boolean } } }
-window.donemdMobileSnapshot = () => ({ body: editor.getJSON(), revision, composing: editor.view.composing });
+window.donemdMobileSnapshot = () => snapshot(editor);
 on('setEditable', payload => editor.setEditable(Boolean(payload)));
-on('flush', () => send('documentChanged', { body: editor.getJSON(), revision }));
+on('flush', () => send('documentChanged', snapshot(editor)));
 const toolbar = attachWritingControls(editor, index => {
   const folded = new Set(headingFoldKey.getState(editor.state)?.collapsed ?? []); folded.delete(index); applyFoldState(editor.view, [...folded]);
 });

@@ -148,7 +148,12 @@ struct MobileEditorScreen: View {
                 if let error = session.error { Text(error).foregroundStyle(.red).font(.callout) }
                 if let message = document.message { Text(message).font(.caption).padding(6).accessibilityIdentifier("document-status") }
                 if document.conflict {
-                    Button("保留所有版本并加载磁盘内容") { Task { await document.preserveConflictsAndReload() } }.padding()
+                    Button("保留所有版本并加载磁盘内容") {
+                        Task {
+                            do { try await document.preserveConflictsAndReload() }
+                            catch { /* The document keeps the conflict and exposes the failure message. */ }
+                        }
+                    }.padding()
                 }
                 if document.needsNormalization {
                     VStack(alignment: .leading, spacing: 10) {
@@ -205,7 +210,10 @@ struct MobileEditorScreen: View {
                             Text(version.reason)
                             Text(String(version.markdown.prefix(300))).font(.caption)
                             Button("载入此版本（先备份当前内容）") {
-                                do { try document.restore(version); recovery = false } catch { document.message = error.localizedDescription }
+                                Task {
+                                    do { try await document.restore(version); recovery = false }
+                                    catch { /* Keep the sheet open; the document exposes the failure message. */ }
+                                }
                             }
                         }
                     }.navigationTitle("恢复版本").toolbar {

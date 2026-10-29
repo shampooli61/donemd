@@ -14,6 +14,11 @@ final class MobileDocument: UIDocument, ObservableObject {
     @Published var isReadOnly = false
     var composing = false
     var flushEditor: (() async -> Bool)?
+    /// A Web-acknowledged transaction lock with a final body snapshot, held until finish ACK.
+    var beginEditorProtection: (() async -> Bool)?
+    var finishEditorProtection: (() async -> Bool)?
+    /// Narrow seam for exercising the suspended UIDocument revert window in tests.
+    var reloadProtectedDocument: (() async -> Bool)?
     private var saving = false
     private var writtenSnapshot: String?
     func applyEditorSnapshot(_ body: TiptapNode, revision: Int) -> Bool {
@@ -59,39 +64,89 @@ final class MobileDocument: UIDocument, ObservableObject {
         saveTask?.cancel()
     }
     func refreshRecovery() { recoveryVersions = (try? DocumentRecoveryStore.versions(for: fileURL)) ?? [] }
-    func restore(_ version: DocumentRecoveryStore.Version) throws {
-        saveTask?.cancel()
-        try DocumentRecoveryStore.save(source, for: fileURL, reason: "恢复前的正文")
-        parsed = MarkdownEngine.parseDocument(source: version.markdown)
-        source = version.markdown
-        acceptNormalization()
-        updateChangeCount(.done)
-        revision += 1
-        refreshRecovery()
-        message = "已载入恢复版本，请保存"
+    @MainActor
+    func restore(_ version: DocumentRecoveryStore.Version) async throws {
+        do {
+            try await withProtectedEditor {
+                try DocumentRecoveryStore.save(source, for: fileURL, reason: "恢复前的正文")
+                parsed = MarkdownEngine.parseDocument(source: version.markdown)
+                source = version.markdown
+                acceptNormalization()
+                updateChangeCount(.done)
+                revision += 1
+                refreshRecovery()
+                message = "已载入恢复版本，请保存"
+            }
+        } catch {
+            message = "恢复处理未完整完成，请核对正文后重试：\(error.localizedDescription)"
+            throw error
+        }
     }
     /// Preserve every participant before resolving system versions. Copies share the original assets directory.
-    func preserveConflictsAndReload() async {
+    @MainActor
+    func preserveConflictsAndReload() async throws {
         do {
-            let versions = NSFileVersion.unresolvedConflictVersionsOfItem(at: fileURL) ?? []
-            let disk = try String(contentsOf: fileURL, encoding: .utf8)
-            var sources = [source, disk]
-            for version in versions { sources.append(try String(contentsOf: version.url, encoding: .utf8)) }
-            for content in Set(sources) {
-                try DocumentRecoveryStore.save(content, for: fileURL, reason: "冲突保护")
-                let copy = fileURL.deletingLastPathComponent().appendingPathComponent(fileURL.deletingPathExtension().lastPathComponent + " 冲突 " + UUID().uuidString.prefix(8) + ".md")
-                try Data(content.utf8).write(to: copy, options: .withoutOverwriting)
-            }
-            for version in versions { version.isResolved = true }
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                revert(toContentsOf: fileURL) { success in
-                    self.conflict = !success
-                    self.message = success ? "已加载磁盘版本；各版本均保留为同目录冲突副本" : "重载失败；副本已保留，请重试"
-                    continuation.resume()
+            try await withProtectedEditor {
+                let versions = NSFileVersion.unresolvedConflictVersionsOfItem(at: fileURL) ?? []
+                let disk = try String(contentsOf: fileURL, encoding: .utf8)
+                var sources = [source, disk]
+                for version in versions { sources.append(try String(contentsOf: version.url, encoding: .utf8)) }
+                for content in Set(sources) {
+                    try DocumentRecoveryStore.save(content, for: fileURL, reason: "冲突保护")
+                    let copy = fileURL.deletingLastPathComponent().appendingPathComponent(fileURL.deletingPathExtension().lastPathComponent + " 冲突 " + UUID().uuidString.prefix(8) + ".md")
+                    try Data(content.utf8).write(to: copy, options: .withoutOverwriting)
                 }
+                for version in versions { version.isResolved = true }
+                let success: Bool
+                if let reloadProtectedDocument { success = await reloadProtectedDocument() }
+                else {
+                    success = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                        revert(toContentsOf: fileURL) { success in
+                            continuation.resume(returning: success)
+                        }
+                    }
+                }
+                conflict = !success
+                message = success ? "已加载磁盘版本；各版本均保留为同目录冲突副本" : "重载失败；副本已保留，请重试"
+                refreshRecovery()
+                if !success { throw CocoaError(.fileReadUnknown) }
             }
-            refreshRecovery()
-        } catch { message = "保留冲突失败，未解除冲突：\(error.localizedDescription)" }
+        } catch {
+            message = "保留冲突或重载失败：\(error.localizedDescription)。未完成加载，已生成的副本仍保留，请重试。"
+            throw error
+        }
+    }
+
+    /// Keep the acknowledged Web transaction lock across backup AND awaited revert.
+    /// A flush alone cannot protect characters entered after its snapshot.
+    @MainActor
+    private func withProtectedEditor(_ operation: @MainActor () async throws -> Void) async throws {
+        guard !saving, !composing else { throw CocoaError(.userCancelled) }
+        saving = true
+        saveTask?.cancel()
+        defer { saveTask?.cancel(); saving = false }
+        let intendedRevision = revision
+        let finish = finishEditorProtection
+        var attemptedLock = false
+        do {
+            if let beginEditorProtection {
+                guard finish != nil else { throw CocoaError(.userCancelled) }
+                attemptedLock = true
+                guard await beginEditorProtection() else { throw CocoaError(.userCancelled) }
+            } else if let flushEditor, !(await flushEditor()) {
+                throw CocoaError(.userCancelled)
+            }
+            try Task.checkCancellation()
+            guard !composing, revision == intendedRevision else { throw CocoaError(.userCancelled) }
+            try await operation()
+        } catch {
+            // Release even when acquisition failed after JS already locked (e.g. stale ACK).
+            if attemptedLock, let finish { _ = await finish() }
+            throw error
+        }
+        if attemptedLock, let finish, !(await finish()) {
+            throw CocoaError(.fileReadUnknown)
+        }
     }
     private var original = ""
     private var originalCanonical = ""
