@@ -5,11 +5,13 @@ import Combine
 private final class ScopedDocumentURL {
     let url: URL
     private let accessing: Bool
-    init(_ url: URL) {
+    private let stop: (URL) -> Void
+    init(_ url: URL, start: (URL) -> Bool, stop: @escaping (URL) -> Void) {
         self.url = url
-        accessing = url.startAccessingSecurityScopedResource()
+        self.stop = stop
+        accessing = start(url)
     }
-    deinit { if accessing { url.stopAccessingSecurityScopedResource() } }
+    deinit { if accessing { stop(url) } }
 }
 
 @MainActor
@@ -18,12 +20,30 @@ final class DocumentOpenCoordinator: ObservableObject {
     @Published private(set) var loading = false
     @Published var error: String?
     @Published private(set) var pendingURL: URL?
+    @Published private(set) var canReauthorizePending = false
     private var pendingAccess: ScopedDocumentURL?
     let folders: FolderStore
     private var activeAccess: ScopedDocumentURL?
     private var activeDocument: MobileDocument?
     private var openingURL: URL?
-    init(folders: FolderStore) { self.folders = folders }
+    private let openDocument: (MobileDocument) async -> Bool
+    private let startAccess: (URL) -> Bool
+    private let stopAccess: (URL) -> Void
+    init(
+        folders: FolderStore,
+        openDocument: @escaping (MobileDocument) async -> Bool = { await $0.open() },
+        startAccess: @escaping (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        stopAccess: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
+    ) {
+        self.folders = folders
+        self.openDocument = openDocument
+        self.startAccess = startAccess
+        self.stopAccess = stopAccess
+    }
+
+    private func scoped(_ url: URL) -> ScopedDocumentURL {
+        ScopedDocumentURL(url, start: startAccess, stop: stopAccess)
+    }
 
     func receiveExternal(_ url: URL) async {
         guard url.isFileURL, ["md", "markdown"].contains(url.pathExtension.lowercased()) else {
@@ -37,13 +57,14 @@ final class DocumentOpenCoordinator: ObservableObject {
             else { error = "已有待打开文档，请先完成或取消该请求，再打开其他文档。" }
             return
         }
-        let access = ScopedDocumentURL(url)
+        let access = scoped(url)
         if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
             error = "请选择 Markdown 文件，而不是文件夹。"
             return
         }
         pendingAccess = access
         pendingURL = url
+        canReauthorizePending = false
         await openPending()
     }
 
@@ -92,6 +113,7 @@ final class DocumentOpenCoordinator: ObservableObject {
         guard !loading else { return }
         pendingURL = nil
         pendingAccess = nil
+        canReauthorizePending = false
         error = nil
     }
 
@@ -99,7 +121,7 @@ final class DocumentOpenCoordinator: ObservableObject {
     func selectFolder(_ folder: URL) async {
         // Validate the delivered URL, not just the picker's requested content type.
         // External file delivery must never attempt to enumerate a Markdown file as a directory.
-        let access = ScopedDocumentURL(folder)
+        let access = scoped(folder)
         defer { withExtendedLifetime(access) {} }
         if folder.isFileURL,
            ["md", "markdown"].contains(folder.pathExtension.lowercased()),
@@ -111,7 +133,7 @@ final class DocumentOpenCoordinator: ObservableObject {
             await authorizePendingFolder(folder)
             return
         }
-        do { try folders.select(folder) }
+        do { try folders.select(folder); error = nil }
         catch { self.error = "文件夹授权失败：\(error.localizedDescription)" }
     }
 
@@ -131,15 +153,25 @@ final class DocumentOpenCoordinator: ObservableObject {
         openingURL = url
         defer { loading = false; openingURL = nil }
         // Transfer the original external scope, rather than assuming a second start grants access.
-        let access = (pendingAccess?.url == url ? pendingAccess : nil) ?? ScopedDocumentURL(url)
+        let access = (pendingAccess?.url == url ? pendingAccess : nil) ?? scoped(url)
         let document = MobileDocument(fileURL: url)
-        if await document.open() {
+        if await openDocument(document) {
             activeAccess = access
             activeDocument = document
             opened = document
             error = nil
         } else {
-            error = "无法打开文档，请确认文件已下载且仍有访问权限，然后重试。"
+            // Membership beneath root is not proof that the provider still grants access.
+            // Keep retry AND explicit reauthorization available, without discarding a
+            // different request that may have arrived while UIDocument.open suspended.
+            if pendingURL == nil {
+                pendingURL = url
+                pendingAccess = access
+            }
+            if let pendingURL, sameFile(pendingURL, url) {
+                canReauthorizePending = true
+                error = "无法打开文档，请确认文件已下载且仍有访问权限；可重试或重新授权文档所在文件夹。"
+            }
         }
     }
 }

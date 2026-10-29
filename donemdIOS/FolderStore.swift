@@ -2,14 +2,60 @@ import Foundation
 import Combine
 import UniformTypeIdentifiers
 
+/// A balanced scope is owned only after directory validation succeeds. Local URLs may
+/// be readable even when startAccessingSecurityScopedResource returns false.
+private final class FolderAccessScope {
+    private let url: URL
+    private let granted: Bool
+    private let stop: (URL) -> Void
+    init(_ url: URL, start: (URL) -> Bool, stop: @escaping (URL) -> Void) {
+        self.url = url
+        self.stop = stop
+        granted = start(url)
+    }
+    deinit { if granted { stop(url) } }
+}
+
+private func coordinatedDirectoryContents(
+    at folder: URL, keys: [URLResourceKey], options: FileManager.DirectoryEnumerationOptions
+) throws -> [URL] {
+    var coordinationError: NSError?
+    var result: Result<[URL], Error>?
+    NSFileCoordinator().coordinate(readingItemAt: folder, options: [], error: &coordinationError) { url in
+        result = Result { try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: options) }
+    }
+    if let coordinationError { throw coordinationError }
+    guard let result else { throw CocoaError(.fileReadUnknown) }
+    return try result.get()
+}
+
 @MainActor
 final class FolderStore: ObservableObject {
     @Published var root: URL?
     @Published var error: String?
-    private var accessing = false
+    // Narrow I/O seams keep invalid bookmark/provider failures reproducible in tests.
+    struct Access {
+        var resolveBookmark: (Data) throws -> URL = { data in
+            var stale = false
+            return try URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
+        }
+        var makeBookmark: (URL) throws -> Data = {
+            try $0.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+        }
+        var readDirectory: (URL, [URLResourceKey], FileManager.DirectoryEnumerationOptions) throws -> [URL] = {
+            try coordinatedDirectoryContents(at: $0, keys: $1, options: $2)
+        }
+        var start: (URL) -> Bool = { $0.startAccessingSecurityScopedResource() }
+        var stop: (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
+    }
+    private let defaults: UserDefaults
+    private let access: Access
+    private var scope: FolderAccessScope?
     private let key = "document-folder-bookmark"
 
-    init() {
+    init(defaults: UserDefaults = .standard, access: Access = Access()) {
+        self.defaults = defaults
+        self.access = access
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--uitest-fixture") {
             let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("UI Test")
@@ -25,29 +71,29 @@ final class FolderStore: ObservableObject {
             return
         }
         #endif
-        guard let data = UserDefaults.standard.data(forKey: key) else { return }
+        guard let data = defaults.data(forKey: key) else { return }
         do {
-            var stale = false
-            let url = try URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
-            try select(url)
-        } catch { self.error = "请重新选择文档文件夹：\(error.localizedDescription)" }
-    }
-    func select(_ url: URL) throws {
-        let granted = url.startAccessingSecurityScopedResource()
-        do {
-            let data = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
-            _ = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
-            if accessing { root?.stopAccessingSecurityScopedResource() }
-            root = url; accessing = granted
-            UserDefaults.standard.set(data, forKey: key)
-            error = nil
+            try select(access.resolveBookmark(data))
         } catch {
-            if granted { url.stopAccessingSecurityScopedResource() }
-            throw error
+            // Remove only the unusable authorization record, never anything on disk.
+            // A failed *new* selection below does not invalidate an existing working grant.
+            defaults.removeObject(forKey: key)
+            self.error = "请重新选择文档文件夹：\(error.localizedDescription)"
         }
     }
+    func select(_ url: URL) throws {
+        let candidate = FolderAccessScope(url, start: access.start, stop: access.stop)
+        // Retain the candidate through validation, including all throwing exits.
+        defer { withExtendedLifetime(candidate) {} }
+        _ = try access.readDirectory(url, [], [])
+        let data = try access.makeBookmark(url)
+        defaults.set(data, forKey: key)
+        scope = candidate
+        root = url
+        error = nil
+    }
     func entries(in folder: URL) throws -> [URL] {
-        try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles])
+        try access.readDirectory(folder, [.isDirectoryKey, .isSymbolicLinkKey], [.skipsHiddenFiles])
             .filter { (try? $0.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true && $0.lastPathComponent != "assets" && ((try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true || ["md", "markdown"].contains($0.pathExtension.lowercased())) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }

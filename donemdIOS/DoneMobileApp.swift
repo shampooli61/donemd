@@ -54,6 +54,9 @@ struct FolderView: View {
                         Button("选择文档所在文件夹") { choosing = true }
                     } else {
                         Button("重试打开文档") { Task { await session.openPending() } }
+                        if session.canReauthorizePending {
+                            Button("重新授权文档所在文件夹") { choosing = true }
+                        }
                     }
                     Button("取消打开", role: .cancel) { session.cancelPending() }
                 }.disabled(session.loading)
