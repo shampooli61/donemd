@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 
+@MainActor
 struct MobileWebView: UIViewRepresentable {
     @ObservedObject var document: MobileDocument
     func makeCoordinator() -> Coordinator { Coordinator(document) }
@@ -28,15 +29,17 @@ struct MobileWebView: UIViewRepresentable {
             context.coordinator.send(command.type, command.payload)
         }
         if context.coordinator.revision != document.revision { context.coordinator.load() }
-        if context.coordinator.ready { context.coordinator.send("documentInfo", ["source": document.source, "identity": document.fileURL.path]) }
+        if context.coordinator.ready, context.coordinator.revision == document.revision { context.coordinator.sendDocumentInfo() }
     }
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: "donemd")
+        coordinator.document.editor.disconnect()
         coordinator.document.flushEditor = nil
         coordinator.document.beginEditorProtection = nil
         coordinator.document.finishEditorProtection = nil
         uiView.stopLoading()
     }
+    @MainActor
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let document: MobileDocument
         weak var webView: WKWebView?
@@ -50,36 +53,115 @@ struct MobileWebView: UIViewRepresentable {
         private var needsReconciliation = false
         private var editorBaselineSource: String?
         var protectionEvaluator: ((String) async -> Any?)?
+        /// Narrow transport seam for envelope-order/dedup tests, not arbitrary JS evaluation.
+        var messageSender: ((String, Any) -> Bool)?
+        private var lastDocumentInfo: (source: String, identity: String)?
         func installNotReadyProtection() {
+            document.editor.installTransport({ [weak self] command in
+                guard let self, let data = try? JSONEncoder().encode(command),
+                      let payload = try? JSONSerialization.jsonObject(with: data) else { return }
+                self.send("editorCommand", payload)
+            }, currentSource: { [weak document] in
+                await document?.currentEditorSource()
+            })
+            document.editor.prepare(identity: document.fileURL.path, revision: document.revision)
             document.beginEditorProtection = { false }
             document.finishEditorProtection = { true }
         }
         init(_ document: MobileDocument) { self.document = document }
-        func send(_ type: String, _ payload: Any) {
+        func send(_ type: String, _ payload: Any, completion: ((Bool) -> Void)? = nil) {
+            if let messageSender {
+                let success = messageSender(type, payload)
+                completion?(success)
+                return
+            }
             guard let data = try? JSONSerialization.data(withJSONObject: ["version": 1, "type": type, "payload": payload]),
-                  let json = String(data: data, encoding: .utf8) else { return }
-            webView?.evaluateJavaScript("window.donemdBridge.receive(\(json))")
+                  let json = String(data: data, encoding: .utf8) else { completion?(false); return }
+            guard let webView else { completion?(false); return }
+            webView.evaluateJavaScript("window.donemdBridge.receive(\(json))") { _, error in
+                completion?(error == nil)
+            }
+        }
+        func sendDocumentInfo(completion: ((Bool) -> Void)? = nil) {
+            let source = document.source
+            let identity = document.fileURL.path
+            guard lastDocumentInfo?.source != source || lastDocumentInfo?.identity != identity else {
+                completion?(true)
+                return
+            }
+            // Cache before evaluation: unrelated SwiftUI refreshes can arrive before its callback.
+            lastDocumentInfo = (source, identity)
+            send("documentInfo", ["source": source, "identity": identity]) { [weak self] success in
+                if !success, self?.lastDocumentInfo?.source == source, self?.lastDocumentInfo?.identity == identity {
+                    self?.lastDocumentInfo = nil
+                }
+                completion?(success)
+            }
+        }
+        private func updateDocumentMode(from state: MobileEditorState) {
+            let readOnly = !state.editable
+            if document.isReadOnly != readOnly { document.isReadOnly = readOnly }
+            document.composing = state.composing
         }
         func load() {
             guard ready, protectionToken == nil, !needsReconciliation, let data = try? JSONEncoder().encode(document.body),
                   let payload = try? JSONSerialization.jsonObject(with: data) else { return }
             revision = document.revision
             editorBaselineSource = document.source
-            send("loadDocument", ["document": payload, "revision": document.revision])
-            send("documentInfo", ["source": document.source, "identity": document.fileURL.path])
+            document.editor.prepare(identity: document.fileURL.path, revision: document.revision)
+            // Establish identity BEFORE loadDocument emits its first state. Activate only
+            // after both synchronous bridge handlers have completed successfully.
+            sendDocumentInfo()
+            let intendedRevision = document.revision
+            send("loadDocument", ["document": payload, "revision": intendedRevision]) { [weak self] success in
+                guard success, let self, self.document.revision == intendedRevision else { return }
+                self.activateNativeSurfaces()
+            }
+        }
+        private func activateNativeSurfaces() {
+            let intendedRevision = document.revision
+            let intendedIdentity = document.fileURL.path
+            document.editor.prepare(identity: intendedIdentity, revision: intendedRevision)
+            sendDocumentInfo { [weak self] success in
+                guard success, let self, self.ready, self.document.revision == intendedRevision,
+                      self.document.fileURL.path == intendedIdentity else { return }
+                Task { @MainActor [weak self] in
+                    guard let self, self.document.revision == intendedRevision else { return }
+                    _ = await self.document.editor.perform("native.activate")
+                }
+            }
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame, let text = message.body as? String,
                   let data = text.data(using: .utf8),
                   let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   envelope["version"] as? Int == 1, let type = envelope["type"] as? String else { return }
+            if type == "editorState", let payload = envelope["payload"],
+               let stateData = try? JSONSerialization.data(withJSONObject: payload),
+               let state = try? JSONDecoder().decode(MobileEditorState.self, from: stateData) {
+                let accepted = document.editor.receive(state: state)
+                if accepted, state.identity == document.fileURL.path, state.revision == document.revision {
+                    updateDocumentMode(from: state)
+                }
+            }
+            if type == "editorCommandResult", let payload = envelope["payload"],
+               let resultData = try? JSONSerialization.data(withJSONObject: payload),
+               let result = try? JSONDecoder().decode(MobileEditorResult.self, from: resultData) {
+                let accepted = document.editor.receive(result: result)
+                if accepted, let state = result.state, state.identity == document.fileURL.path, state.revision == document.revision {
+                    updateDocumentMode(from: state)
+                }
+            }
             if type == "previewImage", let payload = envelope["payload"] as? [String: String],
                let src = payload["src"], let url = URL(string: src), let name = AssetURLSchemeHandler.filename(from: url) {
                 if let file = document.assets.storedFileURL(forFilename: name) { document.previewURL = file }
                 else { document.message = "附件尚未下载或已丢失，请在文件 App 下载后重试。" }
             }
             if type == "compositionState" { document.composing = envelope["payload"] as? Bool ?? false }
-            if type == "editingMode", let payload = envelope["payload"] as? [String: Bool] { document.isReadOnly = !(payload["editable"] ?? true) }
+            if type == "editingMode", let payload = envelope["payload"] as? [String: Bool] {
+                let readOnly = !(payload["editable"] ?? true)
+                if document.isReadOnly != readOnly { document.isReadOnly = readOnly }
+            }
             if type == "editorReady" {
                 ready = true; load()
                 document.beginEditorProtection = { [weak self] in
@@ -181,6 +263,7 @@ struct MobileWebView: UIViewRepresentable {
                 if document.revision == intendedRevision {
                     revision = intendedRevision
                     needsReconciliation = false
+                    activateNativeSurfaces()
                     return true
                 }
                 needsReconciliation = true
@@ -211,6 +294,29 @@ struct MobileWebView: UIViewRepresentable {
             guard document.applyEditorSnapshot(body, revision: revision) else { return false }
             latestSnapshotSequence = sequence
             return true
+        }
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            ready = false
+            revision = -1
+            lastDocumentInfo = nil
+            // Snapshot sequences restart with a new JS world, not an ordinary body reload.
+            latestSnapshotSequence = -1
+            document.flushEditor = nil
+            installNotReadyProtection()
+        }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            ready = false
+            document.editor.disconnect()
+        }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            ready = false
+            document.editor.disconnect()
+        }
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            ready = false
+            document.flushEditor = nil
+            document.editor.disconnect()
+            webView.reload()
         }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             if navigationAction.navigationType == .linkActivated {

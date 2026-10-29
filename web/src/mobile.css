@@ -39,3 +39,14 @@ dialog textarea { width: 100%; min-height: 180px; box-sizing: border-box; font-s
 .mobile-table.is-fullscreen { position: absolute; inset: var(--mobile-reading-height, 0px) 0 var(--mobile-toolbar-height, 0px); z-index: 25; margin: 0; padding: 12px; background: Canvas; display: flex; flex-direction: column; }
 .mobile-table.is-fullscreen .mobile-table-scroll { flex: 1; }
 .reading-mode .mobile-table > button { pointer-events: auto !important; }
+/* The native handshake is the only production migration switch. No ghost rows
+   remain in flex layout, even if a legacy shortcut tries to reopen a bar. */
+.native-controls .mobile-toolbar,
+.native-controls .mobile-reading,
+.native-controls .donemd-find,
+.native-controls .donemd-raw-block__hint,
+.native-controls .donemd-callout__picker,
+.native-controls .donemd-mermaid__hint { display: none !important; }
+.mobile-reading[hidden] { display: none; }
+.native-controls #editor { max-width: 720px; margin-inline: 0 auto; }
+@media (min-width: 700px) { .native-controls #editor { padding-inline: max(28px, env(safe-area-inset-left)) max(28px, env(safe-area-inset-right)); } }

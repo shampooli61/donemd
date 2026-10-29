@@ -54,7 +54,7 @@ export function attachMobileViewport(editor: Editor, toolbar: HTMLElement) {
     shell.style.width = `${viewport?.width ?? window.innerWidth}px`;
     shell.style.height = `${viewport?.height ?? window.innerHeight}px`;
     shell.style.setProperty('--mobile-toolbar-height', `${toolbar.hidden ? 0 : toolbar.getBoundingClientRect().height}px`);
-    shell.style.setProperty('--mobile-reading-height', `${reading.getBoundingClientRect().height}px`);
+    shell.style.setProperty('--mobile-reading-height', `${reading.hidden ? 0 : reading.getBoundingClientRect().height}px`);
     revealCaret();
   }
   function schedule() {
@@ -72,6 +72,7 @@ export function attachMobileViewport(editor: Editor, toolbar: HTMLElement) {
   // Hidden toolbar changes may not produce a viewport event (reading mode).
   const visibility = new MutationObserver(schedule);
   visibility.observe(toolbar, { attributes: true, attributeFilter: ['hidden'] });
+  visibility.observe(reading, { attributes: true, attributeFilter: ['hidden'] });
   update();
   const destroy = () => {
     destroyed = true;

@@ -1,3 +1,4 @@
+import { createNativeCommands } from './mobile-native-commands';
 import { createSnapshotProtection } from './mobile-snapshot-protection';
 import { attachMobileViewport } from './mobile-viewport';
 import { MobileReadOnlyGuard } from './mobile-readonly';
@@ -49,6 +50,12 @@ const editor = new Editor({
   onUpdate: ({ editor }) => { if (!editor.view.composing) send('documentChanged', snapshot(editor)); },
 });
 window.donemdMobileProtection = createSnapshotProtection(editor, () => revision, value => { revision = value; }, () => ++snapshotSequence);
+const nativeCommands = createNativeCommands(editor, {
+  revision: () => revision, locked: () => window.donemdMobileProtection.isLocked(),
+  publish: state => send('editorState', state), result: result => send('editorCommandResult', result),
+  preview: src => send('previewImage', { src }),
+});
+on('editorCommand', payload => { void nativeCommands.receive(payload); });
 // A composition commit may arrive after the final update; never reload during IME input.
 editor.view.dom.addEventListener('compositionstart', () => send('compositionState', true));
 editor.view.dom.addEventListener('compositionend', () => setTimeout(() => {
@@ -58,25 +65,27 @@ editor.view.dom.addEventListener('compositionend', () => setTimeout(() => {
 on('loadDocument', payload => {
   if (window.donemdMobileProtection.isLocked()) return; // A queued ordinary load cannot bypass the replacement lock.
   const next = payload as { document: JSONContent; revision: number };
-  loadMobileDocument(editor, next.document); revision = next.revision;
+  loadMobileDocument(editor, next.document); revision = next.revision; nativeCommands.publish();
 });
 declare global { interface Window { donemdMobileSnapshot: () => { body: JSONContent; revision: number; composing: boolean } } }
 window.donemdMobileSnapshot = () => snapshot(editor);
-on('setEditable', payload => editor.setEditable(Boolean(payload)));
+on('setEditable', payload => { if (!window.donemdMobileProtection.isLocked() && !editor.view.composing) nativeCommands.mode(Boolean(payload)); });
 on('flush', () => send('documentChanged', snapshot(editor)));
 const toolbar = attachWritingControls(editor, index => {
   const folded = new Set(headingFoldKey.getState(editor.state)?.collapsed ?? []); folded.delete(index); applyFoldState(editor.view, [...folded]);
-});
+}, nativeCommands.search);
 attachRichControls(editor, toolbar);
 
 
 on('insertImage', payload => {
+  if (document.body.classList.contains('native-controls') || window.donemdMobileProtection.isLocked() || editor.view.composing || !editor.isEditable) return;
   const src = (payload as { src: string }).src;
   const selected = editor.state.selection;
   if (selected instanceof NodeSelection && selected.node.type.name === 'image') editor.commands.updateAttributes('image', { src });
   else commitRichNode(editor, { type: 'image', attrs: { src } });
 });
 on('insertVideo', payload => {
+  if (document.body.classList.contains('native-controls') || window.donemdMobileProtection.isLocked() || editor.view.composing || !editor.isEditable) return;
   const src = (payload as { src: string }).src;
   const selected = editor.state.selection;
   if (selected instanceof NodeSelection && selected.node.type.name === 'video') editor.commands.updateAttributes('video', { src });
@@ -109,7 +118,7 @@ editor.view.dom.addEventListener('error', event => {
   }
 }, true);
 
-attachReadingControls(editor, toolbar);
+attachReadingControls(editor, toolbar, info => nativeCommands.info(info));
 attachMobileViewport(editor, toolbar);
 
 send('editorReady');

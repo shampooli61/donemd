@@ -6,12 +6,13 @@ import { button, panel } from './mobile-controls';
 import { applyFoldState, headingFoldKey } from './heading-fold';
 import { on, send } from './bridge';
 
-export function attachReadingControls(editor: Editor, toolbar: HTMLElement) {
+export function attachReadingControls(editor: Editor, toolbar: HTMLElement, onInfo?: (info: { identity: string; source: string }) => void) {
   const scroller = document.querySelector('#mobile-scroll') as HTMLElement;
   let source = '', sourceView: EditorView | undefined, identity = '';
   on('documentInfo', payload => {
     const info = payload as { source: string; identity: string };
     source = info.source;
+    onInfo?.(info);
     if (sourceView) sourceView.dispatch({ changes: { from: 0, to: sourceView.state.doc.length, insert: source } });
     if (identity !== info.identity) {
       identity = info.identity;
@@ -22,9 +23,9 @@ export function attachReadingControls(editor: Editor, toolbar: HTMLElement) {
   let timer: ReturnType<typeof setTimeout>;
   scroller.addEventListener('scroll', () => { clearTimeout(timer); timer = setTimeout(() => { if (identity) localStorage.setItem('position:' + identity, String(scroller.scrollTop)); }, 250); });
   const bar = document.createElement('nav'); bar.className = 'mobile-reading'; bar.setAttribute('aria-label', '阅读与导航');
-  let reading = false;
   const mode = button('阅读', () => {
-    reading = !reading; editor.setEditable(!reading); toolbar.hidden = reading;
+    const reading = editor.isEditable;
+    editor.setEditable(!reading); toolbar.hidden = reading || document.body.classList.contains('native-controls');
     send('editingMode', { editable: !reading });
     document.body.classList.toggle('reading-mode', reading); mode.textContent = reading ? '编辑' : '阅读'; mode.setAttribute('aria-label', mode.textContent);
     if (reading) editor.commands.blur();

@@ -6,4 +6,5 @@ export function loadMobileDocument(editor: Editor, content: JSONContent): void {
   const doc = editor.schema.nodeFromJSON(content);
   doc.check();
   editor.view.updateState(EditorState.create({ schema: editor.schema, doc, plugins: editor.state.plugins }));
+  editor.view.dom.dispatchEvent(new CustomEvent('mobile-document-loaded'));
 }

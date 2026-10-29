@@ -27,8 +27,7 @@ export function field(label: string, value = '', multiline = false): HTMLInputEl
   return input;
 }
 
-export function attachWritingControls(editor: Editor, unfold: (ordinal: number) => void) {
-  const search = createDocumentSearch(editor, unfold);
+export function attachWritingControls(editor: Editor, unfold: (ordinal: number) => void, search = createDocumentSearch(editor, unfold)) {
   const toolbar = document.createElement('nav'); toolbar.className = 'mobile-toolbar'; toolbar.setAttribute('aria-label', '写作工具');
   const choices = (title: string, actions: [string, () => void][]) => {
     const { dialog, close } = panel(title);

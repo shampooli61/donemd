@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 /// Keeps the original bytes until an actual edit, including metadata unknown to this client.
 final class MobileDocument: UIDocument, ObservableObject {
+    let editor = MobileEditorController()
     @Published private(set) var source = ""
     @Published private(set) var revision = 0
     @Published var message: String?
@@ -19,6 +20,8 @@ final class MobileDocument: UIDocument, ObservableObject {
     var finishEditorProtection: (() async -> Bool)?
     /// Narrow seam for exercising the suspended UIDocument revert window in tests.
     var reloadProtectedDocument: (() async -> Bool)?
+    /// Narrow failure-injection seam; production reads the existing recovery store unchanged.
+    var loadRecoveryVersions: (() throws -> [DocumentRecoveryStore.Version])?
     private var saving = false
     private var writtenSnapshot: String?
     func applyEditorSnapshot(_ body: TiptapNode, revision: Int) -> Bool {
@@ -26,9 +29,22 @@ final class MobileDocument: UIDocument, ObservableObject {
         replaceBody(body)
         return true
     }
-    func importMedia(_ url: URL, removeTemporary: Bool = false) async {
+    /// A current model snapshot for the read-only source panel; never invokes saveNow.
+    /// A flush that first discovers a real edit retains the ordinary debounced autosave.
+    /// An unchanged source-only read cannot schedule one because replaceBody is a no-op.
+    @MainActor
+    func currentEditorSource() async -> String? {
+        let intendedRevision = revision
+        guard !composing, !saving, let flushEditor else { return nil }
+        guard await flushEditor(), !composing, revision == intendedRevision else { return nil }
+        return source
+    }
+
+    @MainActor
+    func importMedia(_ url: URL, removeTemporary: Bool = false, selectionToken: String? = nil, expectedType: String? = nil) async {
         guard !importing, !isReadOnly else { return }
         let intendedRevision = revision
+        let intendedIdentity = fileURL.path
         let granted = url.startAccessingSecurityScopedResource()
         importing = true
         defer {
@@ -39,11 +55,30 @@ final class MobileDocument: UIDocument, ObservableObject {
         do {
             let type = UTType(filenameExtension: url.pathExtension)
             guard let type, type.conforms(to: .image) || type.conforms(to: .movie) else { throw CocoaError(.fileReadUnsupportedScheme) }
+            let kind = type.conforms(to: .movie) ? "video" : "image"
+            if let expectedType, expectedType != kind {
+                message = "附件类型不匹配，请选择与原引用相同类型的图片或视频；正文未更改，也未写入新附件。"
+                return
+            }
+            // Reject replacement-kind mismatches before capturing a selection or touching assets.
+            var insertionToken = selectionToken
+            if editor.usesCommandTransport, insertionToken == nil {
+                insertionToken = await editor.captureSelection()
+                guard insertionToken != nil else { message = "无法保留附件插入位置，请重新选择。"; return }
+            }
             let manager = assets
             let imported = try await Task.detached {
                 try manager.importFile(at: url, mimeType: type.preferredMIMEType ?? "application/octet-stream")
             }.value
-            guard revision == intendedRevision else { message = "文档已收到新版本，附件已保留，请重新选择插入位置。"; return }
+            try Task.checkCancellation()
+            guard revision == intendedRevision, fileURL.path == intendedIdentity, !isReadOnly else { message = "文档已收到新版本或已只读，附件已保留，请重新选择插入位置。"; return }
+            if editor.usesCommandTransport || insertionToken != nil {
+                let result = await editor.perform(type.conforms(to: .movie) ? "insert.video" : "insert.image",
+                                                  args: ["src": imported.assetURL.absoluteString], selectionToken: insertionToken)
+                message = result.success ? "附件已插入正文" : "附件已保留，但未插入引用：\(result.message ?? "请重新选择插入位置")"
+                return
+            }
+            // Compatibility for legacy callers/bundles that have no acknowledged command bridge.
             outgoing = (UUID(), type.conforms(to: .movie) ? "insertVideo" : "insertImage", ["src": imported.assetURL.absoluteString])
             message = "附件已写入，正在插入正文"
         } catch { message = "附件导入失败：\(error.localizedDescription)。请重试，正文未插入引用。" }
@@ -63,7 +98,42 @@ final class MobileDocument: UIDocument, ObservableObject {
         if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
         saveTask?.cancel()
     }
-    func refreshRecovery() { recoveryVersions = (try? DocumentRecoveryStore.versions(for: fileURL)) ?? [] }
+    @discardableResult
+    func refreshRecovery() -> Bool {
+        do {
+            if let loadRecoveryVersions {
+                recoveryVersions = try loadRecoveryVersions()
+                return true
+            }
+            let directory = try DocumentRecoveryStore.directory(for: fileURL)
+            let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            var validVersions: [DocumentRecoveryStore.Version] = []
+            var failures = 0
+            var firstFailure: String?
+            for entry in entries where entry.pathExtension == "json" {
+                do {
+                    let version = try JSONDecoder().decode(DocumentRecoveryStore.Version.self, from: Data(contentsOf: entry))
+                    // Match the store's visibility window, but a read never deletes/repairs
+                    // either healthy, expired, or unreadable recovery files.
+                    if Date().timeIntervalSince(version.date) <= 30 * 86400 { validVersions.append(version) }
+                } catch {
+                    failures += 1
+                    if firstFailure == nil { firstFailure = error.localizedDescription }
+                }
+            }
+            recoveryVersions = validVersions.sorted { $0.date > $1.date }
+            if failures > 0 {
+                message = "部分恢复版本无法读取（\(failures) 项）：\(firstFailure ?? "未知错误")。可用版本仍可查看，请检查文件访问权限后重试。"
+                return false
+            }
+            return true
+        } catch {
+            // A top-level directory/access failure has no trustworthy current listing.
+            recoveryVersions = []
+            message = "恢复版本读取失败：\(error.localizedDescription)。请检查文件访问权限后重试。"
+            return false
+        }
+    }
     @MainActor
     func restore(_ version: DocumentRecoveryStore.Version) async throws {
         do {
@@ -74,6 +144,7 @@ final class MobileDocument: UIDocument, ObservableObject {
                 acceptNormalization()
                 updateChangeCount(.done)
                 revision += 1
+                editor.prepare(identity: fileURL.path, revision: revision)
                 refreshRecovery()
                 message = "已载入恢复版本，请保存"
             }
@@ -178,7 +249,26 @@ final class MobileDocument: UIDocument, ObservableObject {
         normalizationAccepted = false
         needsNormalization = false
         revision += 1
+        prepareEditorForLoadedRevision()
         refreshRecovery()
+    }
+
+    /// UIDocument may deliver load on a non-main queue. Never block that queue
+    /// waiting for the main actor, which may itself be awaiting a document operation.
+    private func prepareEditorForLoadedRevision() {
+        let intendedIdentity = fileURL.path
+        let intendedRevision = revision
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                editor.prepare(identity: intendedIdentity, revision: intendedRevision)
+            }
+        } else {
+            Task { @MainActor [weak self] in
+                guard let self, self.fileURL.path == intendedIdentity,
+                      self.revision == intendedRevision else { return }
+                self.editor.prepare(identity: intendedIdentity, revision: intendedRevision)
+            }
+        }
     }
 
     override func contents(forType typeName: String) throws -> Any {
