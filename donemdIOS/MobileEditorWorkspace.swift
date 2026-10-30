@@ -37,6 +37,7 @@ struct MobileEditorWorkspace: View {
     @State private var keyboardVisible = false
     @State private var availableHeight: CGFloat = 0
     @State private var availableWidth: CGFloat = 0
+    @State private var titleMeasurement: MobileEditorPaneTitleMeasurement?
     @State private var viewPreference = MobileEditorViewPreference()
     @State private var switchingView = false
     @State private var bodySelection: String?
@@ -45,9 +46,20 @@ struct MobileEditorWorkspace: View {
     @ScaledMetric(relativeTo: .body) private var scaledBodySize = 17
 
     private var layout: MobileEditorLayout {
-        MobileEditorLayout(width: Double(availableWidth), height: Double(availableHeight), accessibility: typeSize.isAccessibilitySize)
+        layout(for: CGSize(width: availableWidth, height: availableHeight))
     }
-    private var mode: MobileEditorLayout.Mode { viewPreference.mode(in: layout) }
+    private func layout(for size: CGSize) -> MobileEditorLayout {
+        let measured = titleMeasurement.flatMap {
+            $0.width == size.width && $0.typeSize == typeSize ? Double($0.height) : nil
+        }
+        return MobileEditorLayout(width: Double(size.width), containerHeight: Double(size.height),
+                                  paneTitleHeight: measured, accessibility: typeSize.isAccessibilitySize)
+    }
+    private func shown(in layout: MobileEditorLayout) -> MobileEditorLayout.Mode {
+        viewPreference.mode(in: layout, focused: editor.state.focused, composing: editor.state.composing,
+                            keyboardVisible: keyboardVisible)
+    }
+    private var mode: MobileEditorLayout.Mode { shown(in: layout) }
     private var sourceOnly: Bool { mode == .source }
     private var canSwitch: Bool { editor.state.ready && !editor.state.composing && !switchingView && !editor.busy }
 
@@ -58,15 +70,15 @@ struct MobileEditorWorkspace: View {
             if document.importing { ProgressView("正在导入附件…") }
             if sharing { ProgressView("正在准备分享…") }
             GeometryReader { geometry in
-                let current = MobileEditorLayout(width: Double(geometry.size.width), height: Double(geometry.size.height), accessibility: typeSize.isAccessibilitySize)
-                let shown = viewPreference.mode(in: current)
+                let current = layout(for: geometry.size)
+                let shown = self.shown(in: current)
                 let divider = shown == .compare ? 1 / max(1, displayScale) : 0
                 let widths = current.widths(for: shown, divider: Double(divider))
                 // Both representables retain the same structural identity, including
                 // while hidden. Never switch their containing subtree on resize.
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {
-                        paneTitle("正文")
+                        MobileEditorPaneTitle(title: "正文")
                         MobileWebView(document: document, fontScale: Double(scaledBodySize / 17))
                             .accessibilityLabel("正文，可编辑")
                             .overlay {
@@ -88,6 +100,20 @@ struct MobileEditorWorkspace: View {
                         .accessibilityHidden(shown == .body)
                         .clipped()
                 }
+                .overlay(alignment: .topLeading) {
+                    // Measure at the candidate compare widths, even if either
+                    // actual pane is currently zero-width. A hidden pane must not
+                    // contribute a spurious wrapped-title height or a sizing loop.
+                    if geometry.size.width >= 760 {
+                        let candidate = current.widths(for: .compare, divider: Double(1 / max(1, displayScale)))
+                        HStack(spacing: 0) {
+                            measuredTitle("正文", width: CGFloat(candidate.body), containerWidth: geometry.size.width)
+                            measuredTitle("Markdown 源·只读", width: CGFloat(candidate.source), containerWidth: geometry.size.width)
+                        }
+                        .hidden().allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
+                .onPreferenceChange(MobileEditorPaneTitleKey.self) { titleMeasurement = $0 }
                 .onAppear { measure(geometry.size) }
                 .onChange(of: geometry.size) { _, size in measure(size) }
             }
@@ -351,8 +377,15 @@ struct MobileEditorWorkspace: View {
         switch mode { case .body: "正文"; case .source: "Markdown 源·只读"; case .compare: "左右对照" }
     }
     private func measure(_ size: CGSize) { availableWidth = size.width; availableHeight = size.height }
-    private func paneTitle(_ title: String) -> some View {
-        Text(title).font(.subheadline).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 20)
+    private func measuredTitle(_ title: String, width: CGFloat, containerWidth: CGFloat) -> some View {
+        MobileEditorPaneTitle(title: title)
+            .frame(width: width)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: MobileEditorPaneTitleKey.self,
+                        value: MobileEditorPaneTitleMeasurement(width: containerWidth, typeSize: typeSize, height: geometry.size.height))
+                }
+            }
     }
     private func toggleView() { selectView(sourceOnly ? .body : .source) }
     private func selectView(_ target: MobileEditorLayout.Mode) {
@@ -435,8 +468,7 @@ private struct MobileEditorSourcePane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Markdown 源·只读").font(.subheadline)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 20)
+            MobileEditorPaneTitle(title: "Markdown 源·只读")
             if narrow {
                 Text("在正文中编辑，此处实时更新。").font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.bottom, 8)
@@ -459,5 +491,29 @@ private struct MobileEditorSourcePane: View {
                     }
                 }
         }.background(theme.background)
+    }
+}
+
+/// Shared by visible headers and the comparison sizing probe; wrapping and
+/// Dynamic Type must have exactly the same intrinsic sizing in both places.
+struct MobileEditorPaneTitle: View {
+    let title: String
+    var body: some View {
+        Text(title).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 20)
+    }
+}
+
+private struct MobileEditorPaneTitleMeasurement: Equatable {
+    let width: CGFloat
+    let typeSize: DynamicTypeSize
+    let height: CGFloat
+}
+
+private struct MobileEditorPaneTitleKey: PreferenceKey {
+    static var defaultValue: MobileEditorPaneTitleMeasurement? { nil }
+    static func reduce(value: inout MobileEditorPaneTitleMeasurement?, nextValue: () -> MobileEditorPaneTitleMeasurement?) {
+        guard let next = nextValue() else { return }
+        if next.height >= (value?.height ?? 0) { value = next }
     }
 }

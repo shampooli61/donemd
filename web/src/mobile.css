@@ -58,6 +58,9 @@ dialog textarea { width: 100%; min-height: 180px; box-sizing: border-box; font-s
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) { --mobile-accent: #55c593; --mobile-muted: #a0a0aa; }
 }
+/* Secondary prose inherits the mobile palette only in this mobile bundle.
+   Keep visual.css's desktop tokens unchanged (including paper's warmer taupe). */
+body { --md-muted: var(--mobile-muted); }
 .mobile-panel button, .mobile-reading button { color: var(--mobile-accent); }
 
 /* Reader preference is unscaled local data; native Dynamic Type is display-only. */

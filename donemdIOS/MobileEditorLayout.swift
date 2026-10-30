@@ -4,8 +4,22 @@ import Foundation
 struct MobileEditorLayout: Equatable {
     enum Mode: String, CaseIterable { case body, source, compare }
     let width: Double
+    /// Available renderer content height, excluding the measured pane titles.
     let height: Double
     let accessibility: Bool
+
+    init(width: Double, height: Double, accessibility: Bool) {
+        self.width = width
+        self.height = height
+        self.accessibility = accessibility
+    }
+
+    init(width: Double, containerHeight: Double, paneTitleHeight: Double?, accessibility: Bool) {
+        // Until title measurement is available, fail closed rather than briefly
+        // exposing compare with less than the required content viewport.
+        self.init(width: width, height: paneTitleHeight.map { max(0, containerHeight - $0) } ?? 0,
+                  accessibility: accessibility)
+    }
 
     var supportsCompare: Bool { width >= 760 && height >= 300 && !accessibility }
 
@@ -25,8 +39,14 @@ struct MobileEditorViewPreference: Equatable {
     private(set) var wide: MobileEditorLayout.Mode?
     private(set) var narrow: MobileEditorLayout.Mode = .body
 
-    func mode(in layout: MobileEditorLayout) -> MobileEditorLayout.Mode {
-        layout.supportsCompare ? (wide ?? .compare) : narrow
+    func mode(in layout: MobileEditorLayout, focused: Bool = false, composing: Bool = false,
+              keyboardVisible: Bool = false) -> MobileEditorLayout.Mode {
+        let desired = layout.supportsCompare ? (wide ?? .compare) : narrow
+        // Geometry is not an explicit, acknowledged view switch. Never hide the
+        // input owner to restore a stale source preference during editing/IME.
+        // This is an effective-mode override, not a change to either preference.
+        if desired == .source && (focused || composing || keyboardVisible) { return .body }
+        return desired
     }
 
     mutating func select(_ mode: MobileEditorLayout.Mode, in layout: MobileEditorLayout) {
