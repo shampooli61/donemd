@@ -21,6 +21,9 @@ settings:
     CURRENT_PROJECT_VERSION: "7"
 
 packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: 0.9.19
   swift-markdown:
     url: https://github.com/swiftlang/swift-markdown
     from: 0.4.0
@@ -222,6 +225,93 @@ targets:
           CODE_SIGNING_ALLOWED: YES
           DEVELOPMENT_TEAM: ""
 
+  donemdIOS:
+    preBuildScripts:
+      - script: |
+          set -e
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/web"
+          if [ ! -d node_modules ]; then npm ci; fi
+          npm run build
+        name: Build Web Bundle
+        basedOnDependencyAnalysis: false
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - donemdIOS
+      - donemd/AppIcon.icon
+      - donemd/MarkdownEngine
+      - donemd/Assets/AssetsManager.swift
+      - donemd/Save/DocumentRecoveryStore.swift
+      - donemd/Bridge/AssetURLSchemeHandler.swift
+      - path: Resources/Web
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: swift-markdown
+        product: Markdown
+      - package: Yams
+        product: Yams
+      - package: ZIPFoundation
+        product: ZIPFoundation
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.ios
+        CURRENT_PROJECT_VERSION: "4"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        PRODUCT_NAME: donemdIOS
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: donemdIOS/Info.plist
+      properties:
+        CFBundleDisplayName: 马上做完
+        # iOS includes SHA256 hashing and OS WebKit networking, no non-exempt encryption.
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportsDocumentBrowser: false
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Markdown Document
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [net.daringfireball.markdown]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: net.daringfireball.markdown
+            UTTypeConformsTo: [public.plain-text]
+            UTTypeTagSpecification:
+              public.filename-extension: [md, markdown]
+  donemdIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [donemdIOSTests]
+    dependencies:
+      - target: donemdIOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.ios.tests
+
+  donemdIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [donemdIOSUITests]
+    dependencies:
+      - target: donemdIOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shampoo.donemd.ios.uitests
+        TEST_TARGET_NAME: donemdIOS
+
 schemes:
   donemd:
     build:
@@ -236,3 +326,13 @@ schemes:
         - donemdTests
     archive:
       config: Release
+
+  donemdIOS:
+    build:
+      targets:
+        donemdIOS: all
+        donemdIOSTests: [test]
+        donemdIOSUITests: [test]
+    test:
+      config: Debug
+      targets: [donemdIOSTests, donemdIOSUITests]

@@ -225,14 +225,16 @@ final class MarkdownEngineTests: XCTestCase {
                     taskItem(checked: true, paragraph(text("done")))
                 ))
             ),
+            // Regression: schema homogeneity must not invent task semantics
+            // for an ordinary item. Split into consecutive list-kind runs.
             Case(
-                name: "task list — mixed item with no checkbox coerced to unchecked",
+                name: "mixed list — ordinary item remains an ordinary item",
                 input: "- [ ] todo\n- plain item\n- [x] done",
-                expected: doc(taskList(
-                    taskItem(checked: false, paragraph(text("todo"))),
-                    taskItem(checked: false, paragraph(text("plain item"))),
-                    taskItem(checked: true, paragraph(text("done")))
-                ))
+                expected: doc(
+                    taskList(taskItem(checked: false, paragraph(text("todo")))),
+                    bulletList(listItem(paragraph(text("plain item")))),
+                    taskList(taskItem(checked: true, paragraph(text("done"))))
+                )
             ),
             Case(
                 name: "GFM table — header + two rows",

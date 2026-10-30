@@ -458,6 +458,14 @@ export const MermaidCodeBlock = CodeBlockLowlight.extend({
       };
 
       const openDrawer = (): void => {
+        // Activated mobile sessions edit advanced content in native forms.
+        // Keep selection/context discoverable, never launch a duplicate web shell.
+        if (document.body.classList.contains('native-controls')) {
+          const pos = typeof getPos === 'function' ? getPos() : undefined;
+          if (typeof pos === 'number') editor.commands.setTextSelection(pos + 1);
+          return;
+        }
+        if (!editor.isEditable || editor.view.composing) return;
         void loadDrawerModule().then((mod) => {
           if (!mod) return;
           mod.openMermaidEditDrawer({

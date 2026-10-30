@@ -97,10 +97,36 @@ public final class AssetsManager {
         )
     }
 
+    /// Stream media into the store so importing a video does not allocate the whole file.
+    public func importFile(at url: URL, mimeType: String) throws -> ImportedImage {
+        let directory = currentAssetsDirectory()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let staging = directory.appendingPathComponent(".import-" + UUID().uuidString)
+        defer { try? fileManager.removeItem(at: staging) }
+        let reader = try FileHandle(forReadingFrom: url)
+        defer { try? reader.close() }
+        guard fileManager.createFile(atPath: staging.path, contents: nil) else { throw AssetsManagerError.writeFailed("create staging file") }
+        let writer = try FileHandle(forWritingTo: staging)
+        defer { try? writer.close() }
+        var hasher = SHA256()
+        while let chunk = try reader.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+            try writer.write(contentsOf: chunk)
+        }
+        try writer.synchronize()
+        let name = hasher.finalize().hexString + "." + Self.filenameExtension(forMimeType: mimeType)
+        let target = directory.appendingPathComponent(name)
+        if !fileManager.fileExists(atPath: target.path) { try fileManager.moveItem(at: staging, to: target) }
+        return ImportedImage(storageFilename: name, assetURL: URL(string: "donemd-asset://" + name)!, markdownPath: "./assets/" + name)
+    }
+
     /// URL of the stored asset on disk for a given filename, or `nil` if
     /// nothing is stored under that name (yet). Used by the URL scheme
     /// handler to satisfy `donemd-asset://` requests.
     public func storedFileURL(forFilename filename: String) -> URL? {
+        guard !filename.isEmpty, filename != ".", filename != "..",
+              !filename.contains("/"), !filename.contains("\\"),
+              !(filename.removingPercentEncoding ?? filename).contains("/") else { return nil }
         let candidates = [
             currentAssetsDirectory().appendingPathComponent(filename),
             // Fall back to temp in case the document just transitioned but
@@ -108,7 +134,11 @@ public final class AssetsManager {
             temporaryDirectory.appendingPathComponent("assets", isDirectory: true)
                 .appendingPathComponent(filename),
         ]
-        return candidates.first { fileManager.fileExists(atPath: $0.path) }
+        return candidates.first {
+            let root = $0.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path + "/"
+            return $0.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root)
+                && fileManager.fileExists(atPath: $0.path)
+        }
     }
 
     /// Migrate any temp-stored assets to the document's real directory.

@@ -1,3 +1,5 @@
+import { applyWritingTheme, normalizeWritingTheme } from './writing-theme';
+import { minimalSourceChange } from './markdown-source-update';
 import { EditorView, basicSetup } from 'codemirror';
 import { Decoration } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
@@ -257,6 +259,14 @@ const placeholderFoldService = foldService.of((state, lineStart, lineEnd) => {
   return p ? { from: p.from, to: p.to } : null;
 });
 
+let mobileSession: { identity: string; revision: number; sequence: number } | undefined;
+let configureSequence = -1;
+function matchesMobileSession(payload: unknown): boolean {
+  if (!mobileSession) return true;
+  const p = payload as { identity?: unknown; revision?: unknown } | null;
+  return p?.identity === mobileSession.identity && p?.revision === mobileSession.revision;
+}
+
 const mountPoint = document.getElementById('source');
 if (!mountPoint) {
   throw new Error('Markdown source mount point #source not found');
@@ -275,6 +285,12 @@ const view = new EditorView({
       // Broken-formula red-flagging (S9 M2). Holds decorations for LaTeX the
       // Visual pane reported as unrenderable.
       badMathField,
+      EditorView.decorations.compute(['doc'], state => {
+        if (!mobileSession) return Decoration.none;
+        return Decoration.set(scanHeadings(state.doc)
+          .filter(h => foldRegionForOrdinal(state.doc, h.ordinal) !== null)
+          .map(h => Decoration.line({ class: 'mobile-source-heading' }).range(state.doc.line(h.lineNo).from)));
+      }),
       // 标题折叠 (heading fold): fold the region under a heading. codeFolding()
       // provides the fold state + hidden-range decorations; basicSetup already
       // installs ONE foldGutter() (a second, hand-added one produced a duplicate
@@ -333,7 +349,7 @@ const view = new EditorView({
             if (effect.is(foldEffect) || effect.is(unfoldEffect)) {
               const ordinal = ordinalForFoldLine(tr.startState.doc, effect.value.from);
               if (ordinal !== null) {
-                send('foldToggled', { ordinal, collapse: effect.is(foldEffect) });
+                send('foldToggled', { ordinal, collapse: effect.is(foldEffect), ...(mobileSession ? { identity: mobileSession.identity, revision: mobileSession.revision, sequence: mobileSession.sequence } : {}) });
               }
             }
           }
@@ -342,6 +358,31 @@ const view = new EditorView({
     ],
   }),
 });
+
+// CodeMirror's desktop gutter markers are spans. Mobile exposes the same
+// fold operation as a keyboard/VoiceOver button without making source editable.
+function labelMobileFolds() {
+  if (!mobileSession) return;
+  view.dom.querySelectorAll<HTMLElement>('.cm-foldGutter .cm-gutterElement').forEach(element => {
+    if (!element.firstElementChild || !element.textContent?.trim()) return;
+    const block = view.lineBlockAtHeight(element.getBoundingClientRect().top - view.documentTop);
+    const line = view.state.doc.lineAt(block.from);
+    const collapsed = element.textContent.includes('›');
+    element.setAttribute('role', 'button');
+    element.tabIndex = 0;
+    element.setAttribute('aria-expanded', String(!collapsed));
+    element.setAttribute('aria-label', `${line.text.replace(/^#+\s*/, '')}，${collapsed ? '展开' : '折叠'}`);
+    element.onkeydown = event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    };
+  });
+}
+const mobileGutterObserver = new MutationObserver(() => {
+  if (mobileSession) requestAnimationFrame(labelMobileFolds);
+});
+mobileGutterObserver.observe(view.dom, { childList: true, subtree: true, characterData: true });
 
 // Given the `from` position of a fold effect, find which heading ordinal it
 // belongs to (the heading whose line contains or precedes `from`). Used to
@@ -378,19 +419,47 @@ function foldPlaceholders() {
 
 // Inbound: Swift pushes the latest serialized Markdown after every Visual
 // edit (and once at startup right after editorReady).
+on('configureMobileSource', (payload) => {
+  const p = payload as { identity: string; revision: number; sequence: number; fontScale: number; theme: string };
+  let success = false;
+  try {
+    if (!p || typeof p.identity !== 'string' || !p.identity || !Number.isInteger(p.revision) || !Number.isInteger(p.sequence) || p.sequence <= configureSequence || !Number.isFinite(p.fontScale) || p.fontScale <= 0) throw new Error('Invalid source configuration');
+    normalizeWritingTheme(p.theme); // Validate everything before changing the display.
+    const changedSession = mobileSession?.identity !== p.identity || mobileSession?.revision !== p.revision;
+    if (changedSession) {
+      // New generations must not briefly present another document as current.
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '' }, annotations: fromSwift.of(true) });
+      currentBadMath = [];
+      view.dispatch({ effects: setBadMath.of([]) });
+    }
+    document.body.classList.add('mobile-source');
+    document.documentElement.setAttribute('data-mobile-source', '');
+    document.documentElement.style.setProperty('--mobile-source-font-size', `${15 * p.fontScale}px`);
+    view.contentDOM.setAttribute('aria-label', 'Markdown 源，只读，可选择复制');
+    applyWritingTheme(p.theme);
+    configureSequence = p.sequence;
+    mobileSession = { identity: p.identity, revision: p.revision, sequence: changedSession ? -1 : mobileSession!.sequence };
+    success = true;
+  } catch { /* Negative ACK leaves the previous accepted display configuration intact. */ }
+  send('mobileSourceConfigured', { identity: p?.identity, revision: p?.revision, sequence: p?.sequence, success, theme: success ? normalizeWritingTheme(p.theme) : undefined });
+});
+
 on('setMarkdownSource', (payload) => {
-  const text =
-    typeof payload === 'string'
-      ? payload
-      : ((payload as { text?: string }).text ?? '');
-  // Replace the entire document. CodeMirror will diff internally and
-  // preserve scroll position when the change is small.
-  view.dispatch({
-    changes: { from: 0, to: view.state.doc.length, insert: text },
-  });
-  // Re-fold placeholder blocks into chips (view.state already reflects the new
-  // doc — dispatch is synchronous).
+  const p = payload as { text?: string; identity?: string; revision?: number; sequence?: number } | null;
+  const tagged = typeof payload !== 'string' && typeof p?.identity === 'string';
+  const ack = (success: boolean) => { if (tagged) send('markdownSourceApplied', { identity: p?.identity, revision: p?.revision, sequence: p?.sequence, success }); };
+  if (mobileSession && (!tagged || !matchesMobileSession(p) || !Number.isInteger(p?.sequence) || p!.sequence! <= mobileSession.sequence)) { ack(false); return; }
+  const text = typeof payload === 'string' ? payload : p?.text;
+  if (typeof text !== 'string') { ack(false); return; }
+  const change = minimalSourceChange(view.state.doc.toString(), text);
+  const top = view.scrollDOM.scrollTop, left = view.scrollDOM.scrollLeft;
+  if (change) view.dispatch({ changes: change, annotations: fromSwift.of(true) });
   foldPlaceholders();
+  // CodeMirror maps the copy selection through the minimal replacement; retain
+  // independent source scroll rather than revealing the updated selection.
+  view.scrollDOM.scrollTop = top; view.scrollDOM.scrollLeft = left;
+  if (mobileSession) mobileSession.sequence = p!.sequence!;
+  ack(true);
 });
 
 // Broken-formula list from the Visual pane (S9 M2). Dispatch it as a StateEffect
@@ -398,6 +467,7 @@ on('setMarkdownSource', (payload) => {
 // independent vs setMarkdownSource: if the text arrives later, the field's
 // docChanged branch re-matches using the cached list.
 on('badMathFormulas', (payload) => {
+  if (!matchesMobileSession(payload)) return;
   const raw = (payload as { latex?: unknown } | null)?.latex;
   const latexes = Array.isArray(raw)
     ? raw.filter((x): x is string => typeof x === 'string')
@@ -412,6 +482,7 @@ on('badMathFormulas', (payload) => {
 // source may be body-only (frontmatter hidden), but frontmatter has no `#`
 // headings, so the ordinal still lines up.
 on('scrollToHeading', (payload) => {
+  if (!matchesMobileSession(payload)) return;
   const index = (payload as { index?: number } | null)?.index;
   if (typeof index !== 'number' || index < 0) return;
 
@@ -434,6 +505,7 @@ on('scrollToHeading', (payload) => {
 // doesn't echo them back. This is the ONLY writer of fold state from outside,
 // mirroring the Visual pane's applyFoldState (anti-loop invariant).
 on('applyFold', (payload) => {
+  if (!matchesMobileSession(payload)) return;
   const raw = (payload as { collapsed?: unknown } | null)?.collapsed;
   const wanted = new Set(
     Array.isArray(raw) ? raw.filter((x): x is number => typeof x === 'number') : []

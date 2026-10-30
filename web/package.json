@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "VITE_ENTRY=visual vite build && VITE_ENTRY=markdown-source vite build",
+    "build": "VITE_ENTRY=visual vite build && VITE_ENTRY=markdown-source vite build && VITE_ENTRY=mobile vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

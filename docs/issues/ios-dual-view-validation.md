@@ -1,0 +1,89 @@
+# 双视图与现有主题验证记录
+
+日期：2026-10-30。范围与布局见 [决策记录](../adr/ios-dual-view-and-themes.md)。本记录区分自动验证、真实模拟器操作和暂停的真机检查，不将设计示意图当作运行证据。
+
+## 已确认的实现
+
+- 原正文编辑器长期保留，新增长期存续的只读 CodeMirror 源文镜像；窄屏整页切换，可用宽度至少760pt、高度至少300pt且非辅助功能大字号时默认左右对照。
+- 同一文档事务提供源文，保留原身份、版本、序号、中文组合输入、恢复和首次规范化保存保护；源码不开放输入，不为每次编辑执行保存或flush。
+- 跟随系统、纸质、赛博夜色使用同一本机主题偏好；正文与源文确认后提交，失败回滚；原生表单和系统工具栏跟随主题。
+
+## 已发现并修正的问题
+
+1. 原生编译错误：局部有效性检查读取主线程状态，已标明主线程隔离。
+2. 启动与主题竞态：保留旧偏好迁移候选；获胜的配置确认负责提交当前内容；每个源页面仅一次初始就绪通知；回滚期间的就绪事件合并并核对控制器身份与版本，失败本身不无限重试。
+3. 实测发现源文停留初始内容、保存快照拒绝。根因是网页桥接同一消息只保留一个处理器，后注册的阅读控件覆盖了快照身份处理器，使身份一直为空。改为在唯一的文档信息回调中同时设置快照与命令身份，不放宽原生拒绝规则。新增完整网页启动测试，覆盖中文编辑和实际保存快照接口。
+4. 展开屏弹层被挤成标题或裁切：仅理想尺寸不足，实际高度改为`min(540, max(240, availableHeight - 24))`，附件锚点改为`.point(.topTrailing)`、箭头方向为`.trailing`，避免整页范围排斥弹层位置。最新构建已安装到Duo，实测三项主题均可见、可选择，不仅是编译通过。
+5. 自动界面查询：系统溢出菜单会丢失自定义标识，补真实可见名称查询；源码按真实渲染文本块拼接、不注入行内换行；保存返回后必须等编辑器消失且目录文件可点，不能因底层目录仍在可访问性树中误判返回成功。
+
+## 自动结果
+
+- 网页类型检查及105/105项、20个测试文件通过，包含完整启动身份回归。旧104项通过结果不代替新增回归。
+- 早期完整选定回归`31478227-0770-45e0-877c-e8f64177c748`：原生94/94项单元测试及六项选定UI流程全部通过。核心视图切换使用普通动画，其余选定流程显式关闭动画；关闭动画的结果不替代普通动画验证。
+- 6887b904：首次集成界面3/6通过；表格源文、规范化保存、主题入口失败。已记录真实缺陷，不删用例、不降低内容断言。
+- Duo补充回归`465b2292-53c5-4044-b29b-18305e6459c1`（任务`bg_d1e8472c`）通过：旋转后主题选择器三项选项与关闭按钮均可点击。
+- 紧凑屏补充回归`a02ff099-1485-4ca9-9c7b-833f68d861f5`（任务`bg_99a3e706`）当时为2/3通过：表格保存流程约78秒、主题流程约42秒通过；首次规范化取消/确认并重新打开流程在第267行失败。后查xcresult，实际源文包含完整表格，确认为测试读取假阴性；源文辅助读取改用一致的`XCUIElementSnapshot`，仍强制检查`actual.contains`，未降低内容断言。
+- 修正测试读取后，运行`02b75c4d-7a50-4896-952e-6fc5e4f13bcf`表格与首次规范化两项2/2通过。归档：`/tmp/airbuild-result-02b75c4d-43f99b/command-output.tar.gz`。
+- 后续运行`aaa496f7-ac42-4abe-873f-b588cac07c1c`原生97/98通过，新弹层单元测试通过；唯一失败为挂载SwiftUI夹具：初始未布局且异步更新未等待。仅测试修正为显式首次布局，并加强window、原生视图及WK断言。最终运行`c30c27bf-0eb5-41bb-9912-201dfc68af86`原生98/98全部通过，包含挂载SwiftUI与实际打开弹层在内的四项外观测试；网页类型检查及105/105测试亦全部通过。归档：`/tmp/airbuild-result-c30c27bf-fddc18/command-output.tar.gz`。
+- 运行`aaa496f7-ac42-4abe-873f-b588cac07c1c`的UI主题持久化通过；普通动画核心流程在第103行`app.launch`失败，XCTest报告pid0，尚未运行核心内容断言。诊断spindump显示实际应用PID2146仍为前台、正常空闲且存活，未观察到应用崩溃，不将此失败称为应用崩溃或核心断言失败。未改动核心UI用例的单独重跑`a0b973eb-b03e-4be3-9a02-ab1c9b6296d0`通过（54.865秒、普通动画开启），确认整页只读源文切换、无键盘及返回正文写作入口。归档：`/tmp/airbuild-result-a0b973eb-b71b76/command-output.tar.gz`。
+- Duo首轮目的地参数错误6734581d在运行原生测试前退出；已改为清单内明确引号的独立Duo测试入口，不算作应用回归结果。
+- Duo回归b704b78b在旋转后的应用框宽高断言失败，尚未进入主题检查；Duo可访问性应用框仍使用物理屏幕坐标，已改用设备方向确认，同时保留三项主题及关闭按钮均可点的实际检查。后续失败运行`94cb9e7b`仍在第148行等待方向时失败，未进入主题检查；不能据此声称自动主题检查通过。
+
+## 真实模拟器操作
+
+- Xcode27.2构建，iOS最低17不变；Duo运行iOS27.1。首次已通过构建b3aa9551；快照身份修正版19340baa；后续弹层复验包d9c0195d。构建`969fc80f-13c1-4ce8-bdf3-3d1c20fe905a`成功并已安装到Duo，完成下述主题、折叠与大字号复验；后续首次外观修正版`3fbb6c03-569a-422f-a715-63079f2f6051`构建成功并已安装，用于下述实时系统切色复验。
+- 前一轮手动候选`0ddc7413-5d89-4085-8a2e-cdde42cfae7b`已安装到Duo：三主题及打开弹层时实时深浅切换均通过，截图`/tmp/duo-verified-picker-dark.png`、`/tmp/duo-verified-picker-light.png`；关闭弹层后纸质/赛博夜色显示通过，截图`/tmp/duo-verified-paper.png`、`/tmp/duo-verified-night.png`。返回文件浏览器未泄漏主题覆盖（`/tmp/duo-verified-filelist.png`），赛博夜色重开仍保留（`/tmp/duo-verified-reopen-night.png`），最终折叠整页源文见`/tmp/duo-verified-folded-source.png`。该候选之后无生产代码变更，仅有测试修正。
+- 通过真实Files选择器授权应用文件夹，新建文档。展开屏实际可用方向为横向，物理截图/可访问性框仍报告669×951；实际正文可用宽度约951，左右对照已显示，不以物理截图宽度判断布局。
+- 修正后真实键入`LIVE-SECOND`，正文与源文同时可见；点击保存返回出现首次规范化确认，确认后返回目录，再次打开仍含相同内容。截图由模拟器实时采集，非设计图。
+- 键盘出现导致可用高度不足时退为正文，收起后恢复对照。粘贴不等同真实拼音组合输入验证。
+- 三套主题均已在Duo实际选择，正文、源文及原生界面同步呈现对应主题：纸质`/tmp/duo-paper-3d.png`、赛博夜色`/tmp/duo-night-3d.png`、跟随系统深色`/tmp/duo-system-dark-3d.png`。
+- 折叠后竖屏显示整页源文，截图`/tmp/duo-closed-source-3d.png`；点击源文未出现`AXKeyboard`。重新展开恢复左右对照，截图`/tmp/duo-reexpanded-3d.png`。
+- 辅助功能大字号下退为整页源文，文本随字号放大，截图`/tmp/duo-accessibility-3d.png`。这些是模拟器操作，不替代真机辅助功能验收。
+- 折叠屏下已实际测试源文片段复制：长按标题并选择Copy，剪贴板返回所选片段`命名`，未出现`AXKeyboard`。仅证明所选片段复制，不声称全文复制已测试。
+
+## 外观缺陷复验结论
+
+- 先前发现跟随系统由深色切为浅色时，当前编辑器保持黑色，退出重开才变浅（`/tmp/duo-system-reopen-light.png`）。首次外观修正版安装后，已实测不退出编辑器即可随系统由深色变浅色：`/tmp/duo-live-follow-dark.png`、`/tmp/duo-live-follow-light.png`。
+- 随后曾发现由赛博夜色切为跟随系统，再由系统深色切浅色后，背景已白但打开的弹层仍黑，历史截图`/tmp/duo-final-system-light-picker.png`。最新候选`0ddc7413-5d89-4085-8a2e-cdde42cfae7b`已手动确认打开弹层实时深浅切换通过（见上方verified截图），该手动缺陷已复验通过，当前手动复验未遗留已观察到的产品缺陷；最终原生98/98与普通动画核心UI重跑均已通过，本轮补齐范围完成；不将其扩张为历史全部功能或真机整体验收完成。
+
+## 交付边界
+
+不发布新TestFlight、不提交App Store、不合并main；现有TestFlight仍为1.1.0(3)，不代表包含此轮补齐。PR112保持Draft，各Issue保持开放。
+
+真实iCloud、系统并发冲突、真机中文组合输入与选区、附件、后台/容量失败、VoiceOver等旧检查继续暂停；不催验、不将本轮模拟器通过替代那些项目。普通动画与明确关闭动画的自动用例分别记录，既有系统热URL超时不因此关闭。
+
+
+## 设计收尾第二轮（修正版）
+
+设计复核发现正文纸质引用/caption未使用移动端弱文字色，并指出几何变化保护及标题高度两项边界。正文现有18/28pt边距与720pt阅读上限经设计接受保留，不为示意差异重做；源码44px折叠区保留。
+
+- 移动正文body作用域将`--md-muted`映射到`--mobile-muted`，纸质为`#7A6D58`对`#F8F4EE`，WCAG比值4.612:1（原3.670:1）。源码已有同色的标记/引用/删除线覆盖，无需再改；Mac主题不变。新增实际CSSOM调色与消费者/作用域、六组主题/系统组合、3/6位十六进制等价和对比度回归。
+- 几何解析先求首选视图，任何方向只要首选为源码且正文有焦点、正在组词或键盘可见，就暂时保留正文；默认对照不受影响，宽/窄偏好不改写。覆盖旧窄屏源码→展开对照→正文输入→收窄，以及旧宽屏源码→窄屏正文输入→展开两条路径。不发送dismiss/focus/强制提交组词命令。
+- 对照阈值改为实际渲染内容高度至少300pt。以同一标题组件在候选双栏宽度、当前Dynamic Type下测量两栏标题最大高度，扣除后判断；尚未测量或宽度/字号已失效时保守单页。标题本身原有36pt最小外观不等于固定扣减。原生测试覆盖真实标题默认、最大普通字号、辅助字号及测量高度+300/299.99边界。
+
+最终修正版构建`5a965ad9-c87b-4b3c-85ec-42c262b4e2ba`通过，Xcode27.2、最低iOS17保留。第一份收尾构建`748714d7`通过但未包含反向展开保护，已被最终修正版替代。
+
+最终修正版回归`fb47e627-be4b-4297-a3d3-9ed2df4f4aa7`全部通过：原生102/102、网页类型检查和115/115（21个文件）、UI2/2：普通动画整页切换48.331秒、主题共享权威/持久化51.092秒（后者显式关闭动画）。归档`/tmp/airbuild-result-fb47e627-a153ea/command-output.tar.gz`。
+
+第一份收尾回归`b08e7a78-74e1-4292-88bb-0c1f8447fc4e`原生102/102、网页115/115、UI4/4通过（核心、表格、首次规范化、主题）；归档`/tmp/airbuild-result-b08e7a78-b2773b/command-output.tar.gz`。该运行早于反向展开保护，不能把其四条UI拼称为最终包的四条全量通过；最终包另跑上述102+115+2覆盖最后改动。
+
+静态复查未发现具体剩余阻断；几何保护是确定性状态回归，不宣称真实中文组词/折叠已在真机验收。共享模拟器同版完整样例屏幕直出图与设计视觉签收另行记录，旧真机暂停及热URL限制不变。
+
+### 2026-10-30 05:05 UTC — visual sign-off and blur timing followup
+
+Colo signed off visual scope in Project message226 after genuine source05, keyboard06 and overflow-menu07 direct-screen replacements. Three themed rich dual-pane samples were already accepted in222. Invalid duplicate-body05 and keyboard-absent06 are preserved separately, never acceptance evidence. Final visual files: `/tmp/parity-final-design/final/05-folded-source-paper.png`, `06-folded-keyboard-paper.png`, `07-folded-keyboard-switch-menu.png` (build5a965ad9, eb7afc2); copied into `.airbuild/screenshots/parity-{source,keyboard,keyboard-menu}_iphone-duo.png`.
+
+A live folded state temporarily ignored source/dismiss attempts. No process restart: Home→app icon resumed same PID92749 and revealed source; subsequent actual paragraph focus showed software keyboard, overflow→source then succeeded. `heal` returned reclaimed=false, no SpringBoard reset. Do not claim the full fold-transition root cause proven.
+
+Code inspection separately confirms `keyboard.dismiss` used Tiptap's deferred rAF blur but ACKed before blur completion, while native layout now protects focused/keyboard-active body. Followup makes ACK wait for actual DOM/editor blur with bounded timeout, FIFO recovery and session/revision/generation/composition revalidation; no synthetic unfocused state or forced IME commit. Corrected candidate build and regression pending; visual approval is not functional closure.
+
+#### Corrected candidate result — 05:09 UTC
+- Build cbbd7bd9-2139-47eb-8a33-913a9e246108 succeeded (Xcode27.2); installed/launched on shared Duo iOS27.1.
+- Test1f9e7ce1-219d-4058-bdf8-a7ce67bf08c7: TypeScript check,21 web test files126/126 including11 new blur lifecycle cases, native102/102, UI2/2 passed. Core source full-page switch37.063s uses ordinary animations; theme persistence53.816s explicitly disables animations. Not a full ordinary-animation UI suite.
+- Actual saved rich fixture: visible body keyboard→native overflow→source header within878ms, source screenshot has no keyboard; returning to body then unfolding restored Paper comparison. Screen-only raw captures08/09/10 in above directory; latest source/compare also in `.airbuild/screenshots/parity-ack-{source,compare}_iphone-duo.png`.
+- Independent read-only review found no blocker. Pending-destruction/external-blur races are not separately tested. No native layout/visual changes, so visual approval226 stands per designer's scope.
+- Proven early-success ACK fixed and regression passed. Historical prolonged folded state resolved via same-process background/foreground and its full cause remains unproven; do not claim exhaustive Duo lifecycle coverage. Old paused physical/iCloud/IME/VoiceOver and warm-URL matters remain unchanged.
+
+### 2026-10-30 — authorized TestFlight delivery
+
+User232 explicitly authorized TestFlight update; original internal group reused. Feature source423fa92 plus iOS-only build stamp4 (Mac untouched). Xcode27.2 signing97256637-2165-48ca-8360-7d00466e00c5 passed. Exact IPA1.1.0(4)/bundle/min17/encryption=false, offline signature and next-number/duplicate gates passed. Single upload produced ASC9906395b-bca5-4a44-813d-5491ee357883, readbackVALID/nonexpired/IN_BETA_TESTING. Original internal group66046776-17d8-4a09-ac2b-3bdeadc603e7 and user's existing tester membership verified; Chinese notes read back exact. Auto-notify enabled, no distinct email-send claim. No external/formal review, no main merge or issue closure. This supersedes earlier historical “TestFlight excludes parity” statements only as of this delivery; prior test ranges and unresolved fold lifecycle/paused real-device acceptance remain unchanged. Service-side install eligibility is confirmed, not actual installation of4 on user's phone.
