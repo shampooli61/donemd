@@ -33,8 +33,9 @@ import './visual.css';
 import './mobile.css';
 
 let revision = 0;
+let identity = '';
 let snapshotSequence = 0;
-const snapshot = (current: Editor) => ({ body: current.getJSON(), revision, composing: current.view.composing, sequence: ++snapshotSequence });
+const snapshot = (current: Editor) => ({ body: current.getJSON(), identity, revision, composing: current.view.composing, sequence: ++snapshotSequence });
 const editor = new Editor({
   element: document.querySelector('#editor') as HTMLElement,
   extensions: [MobileReadOnlyGuard, StarterKit.configure({ codeBlock: false }), Link.configure({ openOnClick: false }),
@@ -118,7 +119,12 @@ editor.view.dom.addEventListener('error', event => {
   }
 }, true);
 
-attachReadingControls(editor, toolbar, info => nativeCommands.info(info));
+// bridge.on has one handler per message type. Reading controls own documentInfo;
+// derive BOTH snapshot and command identities from that one accepted callback.
+attachReadingControls(editor, toolbar, info => {
+  identity = info.identity;
+  nativeCommands.info(info);
+});
 attachMobileViewport(editor, toolbar);
 
 send('editorReady');

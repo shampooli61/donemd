@@ -1,3 +1,4 @@
+import { applyWritingTheme } from './writing-theme';
 import { renderNativePreview } from './mobile-native-preview';
 import type { Editor, JSONContent } from '@tiptap/core';
 import type { Node as PMNode } from '@tiptap/pm/model';
@@ -327,8 +328,8 @@ export function createNativeCommands(editor: Editor, options: Options) {
         case 'reader.set': {
           if (a.theme !== undefined && !['', 'paper', 'night'].includes(a.theme)) throw new Error('无效的阅读主题');
           if (a.fontSize !== undefined && ![15, 17, 19, 22, 26].includes(Number(a.fontSize))) throw new Error('无效的字号');
-          if (a.theme !== undefined) { document.documentElement.dataset.theme = a.theme; localStorage.setItem('mobile-theme', a.theme); }
-          if (a.fontSize !== undefined) { editor.view.dom.style.fontSize = `${a.fontSize}px`; localStorage.setItem('mobile-font', a.fontSize); } break;
+          if (a.theme !== undefined) { applyWritingTheme(a.theme); }
+          if (a.fontSize !== undefined) { document.documentElement.style.setProperty('--mobile-reader-font-size', `${a.fontSize}px`); localStorage.setItem('mobile-font', a.fontSize); } break;
         }
         case 'reader.info': break;
       }

@@ -282,3 +282,55 @@ html, body {
   --cmd-scroll-thumb: rgba(160, 190, 220, 0.26);
   --cmd-scroll-thumb-hover: rgba(160, 190, 220, 0.40);
 }
+
+/* Mobile is the same syntax renderer, with touch/readability adaptations only. */
+:root[data-mobile-source] {
+  --cmd-ink: #1c1c1e;
+  --cmd-mark: #696970;
+  --cmd-strike: #696970;
+  --cmd-quote: #696970;
+  --cmd-selection: rgba(8, 127, 80, .20);
+  --mobile-source-background: #fff;
+  --mobile-source-accent: #087f50;
+}
+:root[data-mobile-source][data-theme="paper"] {
+  --cmd-ink: #3a332b;
+  --cmd-mark: #7a6d58;
+  --cmd-strike: #7a6d58;
+  --cmd-quote: #7a6d58;
+  --cmd-link: #a8492c;
+  --cmd-selection: rgba(168, 73, 44, .18);
+  --mobile-source-background: #f8f4ee;
+  --mobile-source-accent: #a8492c;
+}
+:root[data-mobile-source][data-theme="night"] {
+  --cmd-ink: #b8c0cc;
+  --cmd-mark: #929dad;
+  --cmd-strike: #929dad;
+  --cmd-quote: #929dad;
+  --cmd-selection: rgba(97, 179, 191, .22);
+  --mobile-source-background: #171c26;
+  --mobile-source-accent: #61b3bf;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-mobile-source]:not([data-theme]) {
+    --cmd-ink: #e5e5ea;
+    --cmd-mark: #a0a0aa;
+    --cmd-strike: #a0a0aa;
+    --cmd-quote: #a0a0aa;
+    --cmd-selection: rgba(85, 197, 147, .22);
+    --mobile-source-background: #000;
+    --mobile-source-accent: #55c593;
+  }
+}
+body.mobile-source { background: var(--mobile-source-background); }
+.mobile-source .cm-content { font-size: var(--mobile-source-font-size, 15px); line-height: 1.7; padding: 20px 20px 60px 0 !important; }
+.mobile-source .cm-foldGutter { width: 44px; min-width: 44px; }
+.mobile-source .cm-foldGutter .cm-gutterElement { min-width: 44px; display: flex; align-items: center; justify-content: center; }
+.mobile-source .cm-foldGutter .cm-gutterElement:has(span) { min-height: 44px; }
+.mobile-source .cm-line.mobile-source-heading { min-height: 44px; }
+.mobile-source .cm-foldPlaceholder { color: var(--mobile-source-accent); }
+.mobile-source .cmd-feishu-chip { font-size: inherit; min-height: 44px; }
+@media (prefers-reduced-motion: reduce) {
+  .mobile-source .cm-foldGutter .cm-gutterElement, .mobile-source .cmd-feishu-chip { transition: none; }
+}

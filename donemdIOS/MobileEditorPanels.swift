@@ -5,6 +5,7 @@ struct MobileEditorFormatPanel: View {
     @ObservedObject var editor: MobileEditorController
     @ObservedObject var draft: MobileEditorPanelDraft
     @Environment(\.dynamicTypeSize) private var typeSize
+    @ObservedObject private var themes = MobileThemeStore.shared
     private var enabled: Bool { editor.state.ready && editor.state.editable && !editor.state.locked && !editor.state.composing && !editor.busy }
     var body: some View {
         NavigationStack {
@@ -50,7 +51,7 @@ struct MobileEditorFormatPanel: View {
                     Button { draft.format = false; draft.formatSheet = false } label: { Label("关闭", systemImage: "xmark") }.accessibilityIdentifier("native-format-close")
                 }
             }
-        }
+        }.modifier(MobileThemeSurface())
     }
     @ViewBuilder private var characterStyles: some View {
         character("粗体", "bold", "bold")
@@ -100,7 +101,7 @@ struct MobileEditorFormatPanel: View {
             Task { _ = await editor.perform("format." + command, selectionToken: draft.token) }
         } label: {
             Label(title + (mixed ? "（混合）" : ""), systemImage: active ? "checkmark" : symbol)
-        }.listRowBackground(active ? Color.accentColor.opacity(0.12) : Color(uiColor: .secondarySystemGroupedBackground))
+        }.listRowBackground(active ? Color.accentColor.opacity(0.12) : themes.theme.background)
             .accessibilityAddTraits(active ? .isSelected : [])
             .disabled(!enabled)
     }
@@ -140,14 +141,16 @@ struct MobileEditorPanel: View {
     @ObservedObject var editor: MobileEditorController
     @ObservedObject var draft: MobileEditorPanelDraft
     let media: (Bool, String?, String?) -> Void
+    let sourceMirror: MobileSourceMirror
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var themes = MobileThemeStore.shared
     private var route: String { draft.route ?? "" }
     private var writable: Bool { editor.state.ready && editor.state.editable && !editor.state.locked && !editor.state.composing && !editor.busy }
     private var title: String {
         switch route {
         case "search": "查找与替换"
         case "outline": "文档大纲"
-        case "source": "Markdown 源码"
+        case "theme": "主题模式"
         case "reader": "阅读设置与统计"
         case "table": "表格"
         case "code": "代码与图表"
@@ -165,13 +168,8 @@ struct MobileEditorPanel: View {
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button { dismiss() } label: { Label(route == "source" ? "关闭" : "取消", systemImage: "xmark") }
-                            .accessibilityIdentifier(route == "source" ? "native-source-close" : "native-panel-close")
-                    }
-                    if route == "source" {
-                        ToolbarItem(placement: .primaryAction) {
-                            Button { UIPasteboard.general.string = draft.source; draft.feedback = "已复制源码" } label: { Label("复制", systemImage: "doc.on.doc") }
-                        }
+                        Button { dismiss() } label: { Label("关闭", systemImage: "xmark") }
+                            .accessibilityIdentifier("native-panel-close")
                     }
                     if ["table", "code", "math", "raw"].contains(route) {
                         ToolbarItem(placement: .confirmationAction) {
@@ -181,19 +179,11 @@ struct MobileEditorPanel: View {
                         }
                     }
                 }
-        }
+        }.modifier(MobileThemeSurface())
     }
     @ViewBuilder private var content: some View {
         switch route {
-        case "source":
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("仅供查看，不能在此编辑。").font(.callout)
-                    if let feedback = draft.feedback { Text(feedback).font(.callout) }
-                    Text(draft.source).font(.system(.subheadline, design: .monospaced)).textSelection(.enabled)
-                        .accessibilityIdentifier("native-source-text").frame(maxWidth: .infinity, alignment: .leading)
-                }.padding()
-            }
+        case "theme": MobileEditorThemeForm(editor: editor)
         case "search": search
         case "outline": outline
         case "reader": reader
@@ -291,12 +281,14 @@ struct MobileEditorPanel: View {
                     Button {
                         Task {
                             let result = await editor.perform("outline.jump", args: ["id": String(heading.id)])
-                            if result.success { dismiss() }
+                            if result.success { sourceMirror.jump(to: heading.id); dismiss() }
                         }
                     } label: { Text(heading.title.isEmpty ? "空标题" : heading.title).frame(maxWidth: .infinity, alignment: .leading) }
                         .accessibilityLabel("\(heading.level)级标题，\(heading.title.isEmpty ? "空标题" : heading.title)")
                     Button { run("outline.toggle", ["id": String(heading.id)]) } label: { Label(heading.collapsed ? "展开标题" : "折叠标题", systemImage: heading.collapsed ? "chevron.right" : "chevron.down") }
                         .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+                        .accessibilityLabel("\(heading.title)，\(heading.collapsed ? "展开" : "折叠")")
+                        .accessibilityValue(heading.collapsed ? "已折叠" : "已展开")
                 }.buttonStyle(.borderless).padding(.leading, CGFloat(min(4, max(0, heading.level - 1))) * 12)
             }
         }
@@ -304,11 +296,7 @@ struct MobileEditorPanel: View {
     private var reader: some View {
         Form {
             Section("外观") {
-                Picker("主题", selection: Binding(get: { editor.state.theme == "system" ? "" : editor.state.theme }, set: { run("reader.set", ["theme": $0]) })) {
-                    Text("跟随系统").tag("")
-                    Text("纸质").tag("paper")
-                    Text("赛博夜色").tag("night")
-                }
+                MobileEditorThemeChoices(editor: editor, themes: themes)
             }
             Section("字号") {
                 Picker("正文字号", selection: Binding(get: { editor.state.fontSize }, set: { run("reader.set", ["fontSize": String($0)]) })) {
@@ -391,5 +379,67 @@ struct MobileEditorPanel: View {
             let result = await editor.perform("search.replace", args: ["query": draft.query, "replacement": draft.replacement, "all": String(all)], selectionToken: draft.token)
             draft.feedback = result.message ?? (result.success ? "已替换，可撤销" : "替换失败")
         }
+    }
+}
+
+struct MobileEditorThemeForm: View {
+    @ObservedObject var editor: MobileEditorController
+    @ObservedObject private var themes = MobileThemeStore.shared
+    var body: some View {
+        Form {
+            Section {
+                MobileEditorThemeChoices(editor: editor, themes: themes)
+            } footer: { Text("仅改变显示，不改文件") }
+        }
+    }
+}
+
+private struct MobileEditorThemeChoices: View {
+    @ObservedObject var editor: MobileEditorController
+    @ObservedObject var themes: MobileThemeStore
+    var body: some View {
+        ForEach(MobileWritingTheme.allCases) { theme in
+            Button {
+                Task { _ = await themes.apply(theme, using: editor) }
+            } label: {
+                HStack {
+                    Text(theme.title)
+                    Spacer()
+                    if themes.theme == theme { Image(systemName: "checkmark").accessibilityHidden(true) }
+                }.frame(minHeight: 56)
+            }
+            .listRowBackground(themes.theme.background)
+            .accessibilityIdentifier("native-theme-" + theme.rawValue)
+            .accessibilityAddTraits(themes.theme == theme ? .isSelected : [])
+            .disabled(themes.applying || !editor.state.ready || editor.state.composing)
+        }
+        if let error = themes.error { Text(error).foregroundStyle(.red) }
+    }
+}
+
+/// System bars retain their material; only their theme/tint follows the app authority.
+struct MobileWritingSurface: ViewModifier {
+    let theme: MobileWritingTheme
+    @State private var systemColorScheme: ColorScheme = .light
+    private var colorScheme: ColorScheme {
+        switch theme { case .system: return systemColorScheme; case .paper: return .light; case .night: return .dark }
+    }
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(theme.foreground)
+            .scrollContentBackground(.hidden)
+            .tint(theme.accent)
+            .background(theme.background)
+            .environment(\.colorScheme, colorScheme)
+            .background(MobileWritingAppearance(theme: theme) { style in
+                systemColorScheme = style == .dark ? .dark : .light
+            }.frame(width: 0, height: 0))
+    }
+}
+
+private struct MobileThemeSurface: ViewModifier {
+    @ObservedObject private var themes = MobileThemeStore.shared
+    func body(content: Content) -> some View {
+        content.modifier(MobileWritingSurface(theme: themes.theme))
     }
 }

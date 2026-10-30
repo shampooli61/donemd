@@ -1,3 +1,4 @@
+import { applyWritingTheme } from './writing-theme';
 import type { Editor } from '@tiptap/core';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
@@ -63,13 +64,15 @@ export function attachReadingControls(editor: Editor, toolbar: HTMLElement, onIn
     const info = document.createElement('p'); info.textContent = `正文字符（不含空白）：${Array.from(text.replace(/\s/g, '')).length} · 源码 UTF-8：${new TextEncoder().encode(source).length} 字节`;
     dialog.append(info);
     for (const [label, theme] of [['跟随系统', ''], ['纸质', 'paper'], ['赛博夜色', 'night']]) dialog.append(button(label, () => {
-      document.documentElement.dataset.theme = theme; localStorage.setItem('mobile-theme', theme);
+      applyWritingTheme(theme); localStorage.setItem('mobile-theme', theme);
     }));
     for (const size of [15, 17, 19, 22, 26]) dialog.append(button(`${size} 号字`, () => {
-      editor.view.dom.style.fontSize = `${size}px`; localStorage.setItem('mobile-font', String(size));
+      document.documentElement.style.setProperty('--mobile-reader-font-size', `${size}px`); localStorage.setItem('mobile-font', String(size));
     }));
   }));
   document.querySelector('#mobile-viewport')!.prepend(bar);
-  document.documentElement.dataset.theme = localStorage.getItem('mobile-theme') ?? '';
-  editor.view.dom.style.fontSize = `${Number(localStorage.getItem('mobile-font') ?? 17)}px`;
+  try { applyWritingTheme(localStorage.getItem('mobile-theme') ?? ''); }
+  catch { applyWritingTheme(''); }
+  const savedFont = Number(localStorage.getItem('mobile-font') ?? 17);
+  document.documentElement.style.setProperty('--mobile-reader-font-size', `${[15, 17, 19, 22, 26].includes(savedFont) ? savedFont : 17}px`);
 }

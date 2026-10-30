@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// Keeps the original bytes until an actual edit, including metadata unknown to this client.
 final class MobileDocument: UIDocument, ObservableObject {
     let editor = MobileEditorController()
+    let sourceMirror = MobileSourceMirror()
     @Published private(set) var source = ""
     @Published private(set) var revision = 0
     @Published var message: String?
@@ -145,6 +146,7 @@ final class MobileDocument: UIDocument, ObservableObject {
                 updateChangeCount(.done)
                 revision += 1
                 editor.prepare(identity: fileURL.path, revision: revision)
+                publishSourceMirror()
                 refreshRecovery()
                 message = "已载入恢复版本，请保存"
             }
@@ -261,15 +263,34 @@ final class MobileDocument: UIDocument, ObservableObject {
         if Thread.isMainThread {
             MainActor.assumeIsolated {
                 editor.prepare(identity: intendedIdentity, revision: intendedRevision)
+                publishSourceMirror()
             }
         } else {
             Task { @MainActor [weak self] in
                 guard let self, self.fileURL.path == intendedIdentity,
                       self.revision == intendedRevision else { return }
                 self.editor.prepare(identity: intendedIdentity, revision: intendedRevision)
+                publishSourceMirror()
             }
         }
     }
+
+    /// The projection follows accepted native model updates, not source.get/FIFO/flush.
+    private func publishSourceMirror() {
+        let identity = fileURL.path
+        let revision = revision
+        let markdown = MarkdownEngine.serialize(document: body)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { sourceMirror.accept(source: markdown, identity: identity, revision: revision) }
+        } else {
+            Task { @MainActor [weak self] in
+                guard let self, self.fileURL.path == identity, self.revision == revision else { return }
+                self.sourceMirror.accept(source: markdown, identity: identity, revision: revision)
+            }
+        }
+    }
+    @MainActor
+    func requestMirrorRefresh() { sourceMirror.requestRefresh() }
 
     override func contents(forType typeName: String) throws -> Any {
         guard !needsNormalization, !conflict else { throw CocoaError(.userCancelled) }
@@ -283,6 +304,7 @@ final class MobileDocument: UIDocument, ObservableObject {
     }
 
     func replaceBody(_ body: TiptapNode) {
+        defer { publishSourceMirror() }
         guard body != parsed.body else { return }
         let previousCanonical = MarkdownEngine.serialize(document: parsed)
         var next = parsed

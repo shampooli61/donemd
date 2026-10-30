@@ -90,3 +90,18 @@ PRD：[ #104](https://github.com/shampooli61/donemd/issues/104)。开发 PR：[ 
 - 用户明确要求发新版供体验，签名构建 `d37ed2a3-0462-4ca8-a588-6e2d6673ebc3`（Xcode27.2，iOS17+）成功；精确IPA身份1.1.0(3)，同bundle/team，签名离线校验、下一个版本号与无重复构建检查通过。只修改iOS构建号，Mac构建号不变；Release二进制不含关闭动画测试参数。
 - 已上传Apple，构建 `93984b1e-ce58-4b8d-a45d-e93edec07226` 状态VALID、IN_BETA_TESTING，加入原内部测试组，原私人邮箱测试者权限与中文测试说明已读回确认。未新增外部组/公开链接/正式审核；PR112仍Draft，各Issue开放。手机是否更新到(3)尚未确认。
 - 本轮只体验新版格式、中文输入、保存重开，不恢复旧的复杂验收清单；默认动画自动测试等待与系统热URL超时仍是未通过，发包不是整体验收通过。已撤掉过时的等待用户复验受阻提醒，历史未验收项目保持暂停，不催验。
+
+## 2026-10-30 双视图与主题补充验证（仍未整体验收）
+
+- 网页类型检查及105/105测试通过；运行`31478227-0770-45e0-877c-e8f64177c748`原生94/94与六项选定UI流程通过（核心切换普通动画，其余显式关闭动画）。Duo旋转后主题三选项及关闭按钮可点，补充运行`465b2292-53c5-4044-b29b-18305e6459c1`通过。
+- 紧凑屏`a02ff099`规范化重开失败经xcresult确认是源文读取假阴性，实际含完整表格；改为一致的`XCUIElementSnapshot`并保留强制`actual.contains`断言后，`02b75c4d-7a50-4896-952e-6fc5e4f13bcf`表格及规范化2/2通过。归档：`/tmp/airbuild-result-02b75c4d-43f99b/command-output.tar.gz`。
+- Duo手动确认三主题、折叠整页源文/展开恢复对照及辅助功能大字号回退；折叠后长按标题Copy，剪贴板得到所选`命名`且无`AXKeyboard`，不是全文复制验收。首次外观修正版`3fbb6c03-569a-422f-a715-63079f2f6051`构建并安装成功，当前编辑器不退出即可随系统深→浅变化，截图`/tmp/duo-live-follow-dark.png`、`/tmp/duo-live-follow-light.png`。
+- 最新候选`0ddc7413-5d89-4085-8a2e-cdde42cfae7b`已安装Duo，三主题、打开弹层实时深浅切换、关闭弹层后的纸质/夜色、文件浏览器无主题覆盖泄漏、夜色重开持久化及最终折叠源文均手动通过；截图`/tmp/duo-verified-picker-dark.png`、`/tmp/duo-verified-picker-light.png`、`/tmp/duo-verified-paper.png`、`/tmp/duo-verified-night.png`、`/tmp/duo-verified-filelist.png`、`/tmp/duo-verified-reopen-night.png`、`/tmp/duo-verified-folded-source.png`。此前黑弹层缺陷已手动复验通过，该候选后无生产代码变更。
+- 最新运行`aaa496f7-ac42-4abe-873f-b588cac07c1c`原生97/98通过（新弹层单测通过），唯一挂载SwiftUI夹具失败为首次未布局/异步未等待；仅测试修正首次布局并加强window、原生与WK断言，最终运行`c30c27bf-0eb5-41bb-9912-201dfc68af86`原生98/98全部通过，含挂载SwiftUI与实际打开弹层在内的四项外观测试，网页类型检查及105/105亦全部通过，归档`/tmp/airbuild-result-c30c27bf-fddc18/command-output.tar.gz`；当前手动复验未遗留已观察到的产品缺陷。同运行UI主题持久化通过；普通动画核心用例在`app.launch`第103行被XCTest报告pid0，核心断言未执行，spindump显示实际应用PID2146前台正常空闲存活，未观察到崩溃。核心用例未改，单独重跑`bg60a0f80f`待结果，不预记整体验收完成。
+- 详情见[双视图验证记录](ios-dual-view-validation.md)。真机/iCloud/VoiceOver检查继续暂停，PR112保持Draft，各Issue开放；本轮不新发布、不合并main，不将模拟器局部通过视为完成。
+
+### 双视图本轮最终收尾
+
+- 最终构建`0ddc7413-5d89-4085-8a2e-cdde42cfae7b`已安装Duo；原生98/98、网页类型检查及105/105通过。正文与带样式只读源文实时对照、三主题、打开弹层实时跟随系统深浅、折叠整页与展开恢复、大字号和所选片段复制均已模拟器实测。
+- 普通动画核心切换用例原样重跑`a0b973eb-b03e-4be3-9a02-ab1c9b6296d0`通过；此前XCTest启动PID识别失败保留为历史，不伪称应用崩溃。表格与首次规范化取消/确认保存重开回归`02b75c4d`两项通过，主题持久化及Duo弹层可点击检查通过。关闭动画用例与普通动画用例分别记录，不拼接为全部默认动画套件通过。
+- 此轮补齐完成；详细运行号、修复与截图在[ios-dual-view-validation.md](ios-dual-view-validation.md)。历史真机/iCloud/VoiceOver验收继续暂停，旧热URL限制不因此关闭；不发新TestFlight、不合并main，PR112保持Draft、各Issue开放。

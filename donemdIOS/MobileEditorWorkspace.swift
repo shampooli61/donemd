@@ -15,7 +15,6 @@ final class MobileEditorPanelDraft: ObservableObject {
     @Published var query = ""
     @Published var searchComposing = false
     @Published var replacement = ""
-    @Published var source = ""
     @Published var feedback: String?
     @Published var editing = false
     @Published var restoreBookmark = true
@@ -37,6 +36,20 @@ struct MobileEditorWorkspace: View {
     @State private var resolvingConflict = false
     @State private var keyboardVisible = false
     @State private var availableHeight: CGFloat = 0
+    @State private var availableWidth: CGFloat = 0
+    @State private var viewPreference = MobileEditorViewPreference()
+    @State private var switchingView = false
+    @State private var bodySelection: String?
+    @ObservedObject private var themes = MobileThemeStore.shared
+    @Environment(\.displayScale) private var displayScale
+    @ScaledMetric(relativeTo: .body) private var scaledBodySize = 17
+
+    private var layout: MobileEditorLayout {
+        MobileEditorLayout(width: Double(availableWidth), height: Double(availableHeight), accessibility: typeSize.isAccessibilitySize)
+    }
+    private var mode: MobileEditorLayout.Mode { viewPreference.mode(in: layout) }
+    private var sourceOnly: Bool { mode == .source }
+    private var canSwitch: Bool { editor.state.ready && !editor.state.composing && !switchingView && !editor.busy }
 
     private var writable: Bool { editor.state.ready && editor.state.editable && !editor.state.locked && !editor.state.composing && !editor.busy }
     var body: some View {
@@ -44,27 +57,63 @@ struct MobileEditorWorkspace: View {
             notices
             if document.importing { ProgressView("正在导入附件…") }
             if sharing { ProgressView("正在准备分享…") }
-            MobileWebView(document: document)
+            GeometryReader { geometry in
+                let current = MobileEditorLayout(width: Double(geometry.size.width), height: Double(geometry.size.height), accessibility: typeSize.isAccessibilitySize)
+                let shown = viewPreference.mode(in: current)
+                let divider = shown == .compare ? 1 / max(1, displayScale) : 0
+                let widths = current.widths(for: shown, divider: Double(divider))
+                // Both representables retain the same structural identity, including
+                // while hidden. Never switch their containing subtree on resize.
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        paneTitle("正文")
+                        MobileWebView(document: document, fontScale: Double(scaledBodySize / 17))
+                            .accessibilityLabel("正文，可编辑")
+                            .overlay {
+                                if !editor.state.ready { ProgressView("正在打开文档") }
+                            }
+                    }
+                    .frame(width: CGFloat(widths.body))
+                    .opacity(shown == .source ? 0 : 1)
+                    .allowsHitTesting(shown != .source)
+                    .accessibilityHidden(shown == .source)
+                    .clipped()
+                    Rectangle().fill(Color(uiColor: .separator)).frame(width: divider)
+                        .accessibilityHidden(true)
+                    MobileEditorSourcePane(document: document, mirror: document.sourceMirror,
+                                           theme: themes.theme, fontScale: Double(scaledBodySize / 17), narrow: shown != .compare)
+                        .frame(width: CGFloat(widths.source))
+                        .opacity(shown == .body ? 0 : 1)
+                        .allowsHitTesting(shown != .body)
+                        .accessibilityHidden(shown == .body)
+                        .clipped()
+                }
+                .onAppear { measure(geometry.size) }
+                .onChange(of: geometry.size) { _, size in measure(size) }
+            }
         }
         .navigationTitle(document.fileURL.deletingPathExtension().lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardVisible = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardVisible = false }
-        .background {
-            GeometryReader { geometry in
-                Color.clear
-                    .onAppear { availableHeight = geometry.size.height }
-                    .onChange(of: geometry.size.height) { _, height in availableHeight = height }
-            }
+        .modifier(MobileWritingSurface(theme: themes.theme))
+        .task(id: editor.state.ready) {
+            if editor.state.ready { await themes.reconcile(using: editor) }
         }
         .sheet(isPresented: $panel.formatSheet) {
             MobileEditorFormatPanel(editor: editor, draft: panel)
                 .presentationDetents([.large])
         }
-        .popover(isPresented: Binding(get: { panel.route != nil }, set: { if !$0 { panel.route = nil } })) {
-            MobileEditorPanel(editor: editor, draft: panel, media: media)
-                .frame(idealWidth: 340, idealHeight: 540)
+        .popover(isPresented: Binding(get: { panel.route != nil }, set: { if !$0 { panel.route = nil } }),
+                 attachmentAnchor: .point(.topTrailing), arrowEdge: .trailing) {
+            MobileEditorPanel(editor: editor, draft: panel, media: media, sourceMirror: document.sourceMirror)
+                // NavigationStack/Form has no intrinsic popover height. An ideal
+                // size alone can collapse it to the navigation bar on a regular
+                // scene, hiding every setting. Keep a bounded usable viewport;
+                // compact presentations still adapt to a full native sheet.
+                .frame(idealWidth: panel.route == "theme" ? 308 : 340)
+                .frame(height: min(540, max(240, availableHeight - 24)))
                 .presentationCompactAdaptation(.sheet)
                 .presentationDetents([.large])
         }
@@ -117,7 +166,7 @@ struct MobileEditorWorkspace: View {
                     }
                 }
             }.font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                .background(themes.theme.foreground.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
         }
     }
     private var blockingMessage: String? {
@@ -155,13 +204,18 @@ struct MobileEditorWorkspace: View {
                 ToolbarItem(placement: .confirmationAction) { dismissKeyboardButton }
             }
         }
-        if editor.state.searchActive {
+        if #available(iOS 27.0, *) {
+            ToolbarItem(placement: .primaryAction) { viewButton }.visibilityPriority(.high)
+        } else {
+            ToolbarItem(placement: .primaryAction) { viewButton }
+        }
+        if editor.state.searchActive && !sourceOnly {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { command("search.previous") } label: { Label("上一处", systemImage: "chevron.up").labelStyle(.iconOnly) }.labelStyle(.iconOnly).disabled(editor.state.searchCount == 0)
                 Button { command("search.next") } label: { Label("下一处", systemImage: "chevron.down").labelStyle(.iconOnly) }.labelStyle(.iconOnly).disabled(editor.state.searchCount == 0)
                 Button { command("search.close") } label: { Label("关闭查找", systemImage: "xmark").labelStyle(.iconOnly) }.labelStyle(.iconOnly)
             }
-        } else if editor.state.editable {
+        } else if editor.state.editable && !sourceOnly {
             if #available(iOS 27.0, *) {
                 ToolbarItem(placement: .primaryAction) { history }.visibilityPriority(.automatic)
                 ToolbarItem(placement: .primaryAction) { format }.visibilityPriority(.high)
@@ -171,7 +225,7 @@ struct MobileEditorWorkspace: View {
                 ToolbarItem(placement: .primaryAction) { format }
                 ToolbarItem(placement: .primaryAction) { insert }
             }
-        } else {
+        } else if !sourceOnly {
             ToolbarItem(placement: .primaryAction) {
                 Button { command("mode.set", ["editable": "true"]) } label: { Label("编辑", systemImage: "square.and.pencil").labelStyle(.iconOnly) }.labelStyle(.iconOnly).disabled(editor.state.locked)
             }
@@ -235,23 +289,94 @@ struct MobileEditorWorkspace: View {
     }
     @ViewBuilder private var more: some View {
         Section {
-            panelButton("查找与替换", "magnifyingglass", "search")
+            Button { toggleView() } label: {
+                Label(sourceOnly ? "切换到正文" : "切换到 Markdown 源", systemImage: "rectangle.split.2x1")
+            }.disabled(!canSwitch).accessibilityHint(editor.state.composing ? "选字完成后可切换" : "")
+            if !sourceOnly { format }
+            Button { save(true) } label: { Label("保存并返回目录", systemImage: "chevron.backward") }.disabled(saving)
+        }
+        Section {
+            Menu { viewChoices } label: { Label("视图", systemImage: "rectangle.split.2x1") }
+            panelButton("主题模式", "paintpalette", "theme")
+                .accessibilityIdentifier("native-theme-mode")
+            if !sourceOnly { panelButton("查找与替换", "magnifyingglass", "search") }
             panelButton("文档大纲", "list.bullet.indent", "outline")
-            Button { command("mode.set", ["editable": editor.state.editable ? "false" : "true"]) } label: { Label(editor.state.editable ? "阅读模式" : "编辑", systemImage: editor.state.editable ? "book" : "square.and.pencil").labelStyle(.titleAndIcon) }
-            panelButton("查看 Markdown 源码", "chevron.left.forwardslash.chevron.right", "source")
+            if !sourceOnly {
+                Button { command("mode.set", ["editable": editor.state.editable ? "false" : "true"]) } label: { Label(editor.state.editable ? "阅读模式" : "编辑", systemImage: editor.state.editable ? "book" : "square.and.pencil") }
+            }
         }
         Section {
             Menu {
-                Button { share(false) } label: { Label("Markdown 文件", systemImage: "doc.text").labelStyle(.titleAndIcon) }
-                Button { share(true) } label: { Label("文档与附件", systemImage: "paperclip").labelStyle(.titleAndIcon) }
-            } label: { Label("分享", systemImage: "square.and.arrow.up").labelStyle(.titleAndIcon) }.disabled(sharing)
-            Button { save(false) } label: { Label("保存", systemImage: "tray.and.arrow.down").labelStyle(.titleAndIcon) }.disabled(saving)
-            Button(action: recover) { Label("恢复版本", systemImage: "clock.arrow.circlepath").labelStyle(.titleAndIcon) }.disabled(!editor.state.ready || editor.state.locked || editor.busy)
+                Button { share(false) } label: { Label("Markdown 文件", systemImage: "doc.text") }
+                Button { share(true) } label: { Label("文档与附件", systemImage: "paperclip") }
+            } label: { Label("分享", systemImage: "square.and.arrow.up") }.disabled(sharing)
+            Button { save(false) } label: { Label("保存", systemImage: "tray.and.arrow.down") }.disabled(saving)
+            Button(action: recover) { Label("恢复版本", systemImage: "clock.arrow.circlepath") }.disabled(!editor.state.ready || editor.state.locked || editor.busy)
         }
         Section {
-            panelButton("段落", "paragraphsign", "paragraph")
-            Button { openContext() } label: { Label("编辑所选内容", systemImage: "pencil").labelStyle(.titleAndIcon) }.disabled(editor.state.nodeType.isEmpty)
+            if !sourceOnly {
+                panelButton("段落", "paragraphsign", "paragraph")
+                Button { openContext() } label: { Label("编辑所选内容", systemImage: "pencil") }.disabled(editor.state.nodeType.isEmpty)
+            }
             panelButton("阅读设置与统计", "textformat.size", "reader")
+        }
+    }
+    @ViewBuilder private var viewButton: some View {
+        if layout.supportsCompare {
+            Menu { viewChoices } label: { Label("视图", systemImage: "rectangle.split.2x1") }
+                .labelStyle(.iconOnly).accessibilityIdentifier("native-view-toggle")
+                .accessibilityValue(modeTitle(mode)).disabled(!canSwitch)
+                .accessibilityHint(editor.state.composing ? "选字完成后可切换" : "")
+        } else {
+            Button { toggleView() } label: {
+                Label(sourceOnly ? "切换到正文" : "切换到 Markdown 源", systemImage: "rectangle.split.2x1")
+            }.labelStyle(.iconOnly).accessibilityIdentifier("native-view-toggle")
+                .accessibilityValue(modeTitle(mode)).disabled(!canSwitch)
+                .accessibilityHint(editor.state.composing ? "选字完成后可切换" : "")
+                .contextMenu { viewChoices }
+        }
+    }
+    @ViewBuilder private var viewChoices: some View {
+        viewChoice(.body, symbol: "doc.text")
+        viewChoice(.source, symbol: "chevron.left.forwardslash.chevron.right")
+        if layout.supportsCompare { viewChoice(.compare, symbol: "rectangle.split.2x1") }
+    }
+    private func viewChoice(_ choice: MobileEditorLayout.Mode, symbol: String) -> some View {
+        Button { selectView(choice) } label: {
+            Label(modeTitle(choice), systemImage: mode == choice ? "checkmark" : symbol)
+        }.disabled(!canSwitch).accessibilityIdentifier("native-view-" + choice.rawValue)
+            .accessibilityAddTraits(mode == choice ? .isSelected : [])
+    }
+    private func modeTitle(_ mode: MobileEditorLayout.Mode) -> String {
+        switch mode { case .body: "正文"; case .source: "Markdown 源·只读"; case .compare: "左右对照" }
+    }
+    private func measure(_ size: CGSize) { availableWidth = size.width; availableHeight = size.height }
+    private func paneTitle(_ title: String) -> some View {
+        Text(title).font(.subheadline).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 20)
+    }
+    private func toggleView() { selectView(sourceOnly ? .body : .source) }
+    private func selectView(_ target: MobileEditorLayout.Mode) {
+        guard canSwitch, target != mode else { return }
+        let gate = MobileEditorViewSwitchGuard(identity: editor.state.identity, revision: editor.state.revision)
+        switchingView = true
+        Task {
+            defer { switchingView = false }
+            @MainActor func valid() -> Bool {
+                gate.accepts(identity: editor.state.identity, revision: editor.state.revision,
+                             ready: editor.state.ready, composing: editor.state.composing)
+            }
+            guard valid() else { return }
+            if target == .source {
+                guard let token = await editor.captureSelection(), valid() else { return }
+                let dismissed = await editor.perform("keyboard.dismiss")
+                guard dismissed.success, valid() else { return }
+                bodySelection = token
+            } else if sourceOnly, let token = bodySelection {
+                let restored = await editor.perform("focus.restore", args: ["focus": "false"], selectionToken: token)
+                guard restored.success, valid() else { return }
+            }
+            viewPreference.select(target, in: layout)
+            if target == .source { UIAccessibility.post(notification: .announcement, argument: "Markdown 源，只读") }
         }
     }
     private func panelButton(_ title: String, _ symbol: String, _ route: String) -> some View {
@@ -271,19 +396,17 @@ struct MobileEditorWorkspace: View {
     }
     private func open(_ route: String, editing: Bool = false, display: Bool = false) {
         Task {
-            guard let token = await editor.captureSelection() else { return }
+            let displayOnly = ["reader", "theme", "outline"].contains(route)
+            let token: String?
+            if displayOnly { token = nil } else { token = await editor.captureSelection() }
+            guard token != nil || displayOnly else { return }
             panel.token = token; panel.feedback = nil; panel.editing = editing
-            panel.restoreBookmark = !["search", "outline", "source", "reader"].contains(route)
+            panel.restoreBookmark = !["search", "outline", "reader", "theme"].contains(route)
             panel.text = editing ? (editor.state.attributes["text"] ?? editor.state.attributes["alt"] ?? "") : (route == "link" ? editor.state.attributes["href"] ?? "" : "")
             panel.language = editing ? editor.state.attributes["language"] ?? "" : ""
             panel.display = editing ? editor.state.attributes["display"] == "true" : display
             panel.query = editor.state.searchQuery
             panel.searchComposing = false
-            if route == "source" {
-                let result = await editor.perform("source.get")
-                guard result.success, let source = result.data?["source"] else { return }
-                panel.source = source
-            }
             panel.route = route
         }
     }
@@ -299,5 +422,42 @@ private struct MobileEditorSubtitle: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if #available(iOS 26.0, *) { content.navigationSubtitle(Text(value)) }
         else { content.accessibilityValue(value) }
+    }
+}
+
+/// Owns observation of mirror status without replacing the mounted source renderer.
+private struct MobileEditorSourcePane: View {
+    let document: MobileDocument
+    @ObservedObject var mirror: MobileSourceMirror
+    let theme: MobileWritingTheme
+    let fontScale: Double
+    let narrow: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Markdown 源·只读").font(.subheadline)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 20)
+            if narrow {
+                Text("在正文中编辑，此处实时更新。").font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.bottom, 8)
+            }
+            if mirror.error != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Markdown 源暂时无法更新")
+                    if mirror.stale { Text("显示上次内容").font(.footnote) }
+                    Button("重试") { document.requestMirrorRefresh() }.frame(minHeight: 44)
+                }.padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            MobileSourceWebView(document: document, theme: theme, fontScale: fontScale)
+                .accessibilityIdentifier("native-source-web")
+                .accessibilityLabel("Markdown 源，只读，可选择复制")
+                .overlay {
+                    if !mirror.ready && mirror.error == nil {
+                        ProgressView("正在准备 Markdown 源")
+                    } else if mirror.ready && mirror.source.isEmpty {
+                        Text("暂无 Markdown 内容").foregroundStyle(.secondary).allowsHitTesting(false)
+                    }
+                }
+        }.background(theme.background)
     }
 }

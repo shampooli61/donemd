@@ -300,3 +300,49 @@ it('renders actual formula drafts and escaped raw/code previews without editor t
   expect(broken.data?.error).toContain('原文会保留');
   expect(dispatch).not.toHaveBeenCalled(); expect(editor.getJSON()).toEqual(before); expect(editor.state.selection.toJSON()).toEqual(selection);
 });
+
+describe('native theme authority', () => {
+  it('ACKs all three themes without document/history/font changes or independent web persistence', async () => {
+    localStorage.setItem('mobile-font', '22');
+    const before = editor.getJSON(), undo = native.state().canUndo;
+    const redraw = vi.fn();
+    (window as Window & { __donemdRerenderMermaid?: () => void }).__donemdRerenderMermaid = redraw;
+    for (const theme of ['paper', 'night', '']) {
+      const result = await send('reader.set', { theme });
+      expect(result.success).toBe(true);
+      expect(result.state?.theme).toBe(theme);
+      expect(editor.getJSON()).toEqual(before);
+      expect(native.state().canUndo).toBe(undo);
+      expect(localStorage.getItem('mobile-font')).toBe('22');
+      expect(localStorage.getItem('mobile-theme')).toBeNull();
+    }
+    expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
+    expect(redraw).toHaveBeenCalledTimes(3);
+    delete (window as Window & { __donemdRerenderMermaid?: () => void }).__donemdRerenderMermaid;
+  });
+  it('validates theme and font atomically before changing either', async () => {
+    await send('reader.set', { theme: 'paper' });
+    expect((await send('reader.set', { theme: 'night', fontSize: '18' })).success).toBe(false);
+    expect(document.documentElement.dataset.theme).toBe('paper');
+    expect((await send('reader.set', { theme: 'bogus' })).success).toBe(false);
+    expect(document.documentElement.dataset.theme).toBe('paper');
+  });
+});
+
+describe('native reader font preference', () => {
+  it('persists unscaled fontSize and leaves native display scale and document/history unchanged', async () => {
+    const before = editor.getJSON(), undo = native.state().canUndo;
+    document.documentElement.style.setProperty('--mobile-font-scale', '1.4');
+    const result = await send('reader.set', { fontSize: '22' });
+    expect(result.success).toBe(true);
+    expect(result.state?.fontSize).toBe(22);
+    expect(localStorage.getItem('mobile-font')).toBe('22');
+    expect(document.documentElement.style.getPropertyValue('--mobile-reader-font-size')).toBe('22px');
+    expect(document.documentElement.style.getPropertyValue('--mobile-font-scale')).toBe('1.4');
+    expect(editor.getJSON()).toEqual(before);
+    expect(native.state().canUndo).toBe(undo);
+    await send('reader.set', { theme: 'night' });
+    expect(native.state().fontSize).toBe(22);
+    expect(localStorage.getItem('mobile-font')).toBe('22');
+  });
+});

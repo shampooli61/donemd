@@ -4,15 +4,49 @@ import WebKit
 @MainActor
 struct MobileWebView: UIViewRepresentable {
     @ObservedObject var document: MobileDocument
+    var fontScale: Double = 1
+    private var displayFontScale: Double { fontScale.isFinite ? max(0.5, min(fontScale, 10)) : 1 }
     func makeCoordinator() -> Coordinator { Coordinator(document) }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: "donemd")
+        config.userContentController.addUserScript(WKUserScript(
+            source: "document.documentElement.style.setProperty('--mobile-font-scale', '\(displayFontScale)');",
+            injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        context.coordinator.fontScale = displayFontScale
         let assets = AssetURLSchemeHandler()
         assets.assetsManager = document.assets
         config.setURLSchemeHandler(assets, forURLScheme: AssetURLSchemeHandler.scheme)
         config.allowsInlineMediaPlayback = true
+        if let saved = UserDefaults.standard.string(forKey: MobileThemeStore.preferenceKey),
+           let persisted = MobileWritingTheme(rawValue: saved),
+           let data = try? JSONEncoder().encode(persisted.webValue),
+           let json = String(data: data, encoding: .utf8) {
+            // Native preference is authoritative only after its first successful ACK.
+            // With no preference leave legacy mobile-theme untouched for migration.
+            let script = """
+            (() => {
+              const theme = \(json);
+              try { localStorage.setItem('mobile-theme', theme); } catch (_) {}
+              const paint = () => {
+                if (!document.documentElement) return false;
+                if (theme) document.documentElement.setAttribute('data-theme', theme);
+                else document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = theme === 'paper' ? 'light' : theme === 'night' ? 'dark' : 'light dark';
+                return true;
+              };
+              if (!paint()) {
+                const observer = new MutationObserver(() => { if (paint()) observer.disconnect(); });
+                observer.observe(document, {childList:true});
+              }
+            })();
+            """
+            config.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         let view = WKWebView(frame: .zero, configuration: config)
+        view.isOpaque = false
+        view.backgroundColor = UIColor(MobileThemeStore.shared.theme.background)
+        view.scrollView.backgroundColor = UIColor(MobileThemeStore.shared.theme.background)
         view.navigationDelegate = context.coordinator
         view.scrollView.keyboardDismissMode = .interactive
         context.coordinator.webView = view
@@ -24,6 +58,13 @@ struct MobileWebView: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {
+        let theme = MobileThemeStore.shared.theme
+        if context.coordinator.fontScale != displayFontScale {
+            context.coordinator.fontScale = displayFontScale
+            view.evaluateJavaScript("document.documentElement.style.setProperty('--mobile-font-scale', '\(displayFontScale)');", completionHandler: nil)
+        }
+        view.backgroundColor = UIColor(theme.background)
+        view.scrollView.backgroundColor = UIColor(theme.background)
         if let command = document.outgoing, command.id != context.coordinator.lastCommand, context.coordinator.ready {
             context.coordinator.lastCommand = command.id
             context.coordinator.send(command.type, command.payload)
@@ -44,6 +85,7 @@ struct MobileWebView: UIViewRepresentable {
         let document: MobileDocument
         weak var webView: WKWebView?
         var lastCommand: UUID?
+        var fontScale: Double = 1
         var ready = false
         var revision = -1
         private var protectionToken: String?
@@ -102,6 +144,7 @@ struct MobileWebView: UIViewRepresentable {
             let readOnly = !state.editable
             if document.isReadOnly != readOnly { document.isReadOnly = readOnly }
             document.composing = state.composing
+            document.sourceMirror.setFolded(state.headings.filter(\.collapsed).map(\.id))
         }
         func load() {
             guard ready, protectionToken == nil, !needsReconciliation, let data = try? JSONEncoder().encode(document.body),
@@ -157,6 +200,8 @@ struct MobileWebView: UIViewRepresentable {
                 if let file = document.assets.storedFileURL(forFilename: name) { document.previewURL = file }
                 else { document.message = "附件尚未下载或已丢失，请在文件 App 下载后重试。" }
             }
+            if type == "badMathFormulas", let payload = envelope["payload"] as? [String: Any],
+               let formulas = payload["latex"] as? [String] { document.sourceMirror.setBadMath(formulas) }
             if type == "compositionState" { document.composing = envelope["payload"] as? Bool ?? false }
             if type == "editingMode", let payload = envelope["payload"] as? [String: Bool] {
                 let readOnly = !(payload["editable"] ?? true)
@@ -164,6 +209,7 @@ struct MobileWebView: UIViewRepresentable {
             }
             if type == "editorReady" {
                 ready = true; load()
+                webView?.evaluateJavaScript("document.documentElement.style.setProperty('--mobile-font-scale', '\(fontScale)');", completionHandler: nil)
                 document.beginEditorProtection = { [weak self] in
                     guard let self else { return false }
                     return await self.beginProtection()
@@ -286,7 +332,10 @@ struct MobileWebView: UIViewRepresentable {
         }
         @discardableResult
         func applySnapshot(_ payload: [String: Any]) -> Bool {
-            guard let revision = payload["revision"] as? Int,
+            // New bundles carry identity; reject mismatches while retaining legacy snapshot compatibility.
+            if let identity = payload["identity"] as? String, identity != document.fileURL.path { return false }
+            guard payload["composing"] as? Bool != true,
+                  let revision = payload["revision"] as? Int,
                   let sequence = payload["sequence"] as? Int, sequence > latestSnapshotSequence,
                   let bodyValue = payload["body"],
                   let data = try? JSONSerialization.data(withJSONObject: bodyValue),
