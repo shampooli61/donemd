@@ -68,3 +68,18 @@
 第一份收尾回归`b08e7a78-74e1-4292-88bb-0c1f8447fc4e`原生102/102、网页115/115、UI4/4通过（核心、表格、首次规范化、主题）；归档`/tmp/airbuild-result-b08e7a78-b2773b/command-output.tar.gz`。该运行早于反向展开保护，不能把其四条UI拼称为最终包的四条全量通过；最终包另跑上述102+115+2覆盖最后改动。
 
 静态复查未发现具体剩余阻断；几何保护是确定性状态回归，不宣称真实中文组词/折叠已在真机验收。共享模拟器同版完整样例屏幕直出图与设计视觉签收另行记录，旧真机暂停及热URL限制不变。
+
+### 2026-10-30 05:05 UTC — visual sign-off and blur timing followup
+
+Colo signed off visual scope in Project message226 after genuine source05, keyboard06 and overflow-menu07 direct-screen replacements. Three themed rich dual-pane samples were already accepted in222. Invalid duplicate-body05 and keyboard-absent06 are preserved separately, never acceptance evidence. Final visual files: `/tmp/parity-final-design/final/05-folded-source-paper.png`, `06-folded-keyboard-paper.png`, `07-folded-keyboard-switch-menu.png` (build5a965ad9, eb7afc2); copied into `.airbuild/screenshots/parity-{source,keyboard,keyboard-menu}_iphone-duo.png`.
+
+A live folded state temporarily ignored source/dismiss attempts. No process restart: Home→app icon resumed same PID92749 and revealed source; subsequent actual paragraph focus showed software keyboard, overflow→source then succeeded. `heal` returned reclaimed=false, no SpringBoard reset. Do not claim the full fold-transition root cause proven.
+
+Code inspection separately confirms `keyboard.dismiss` used Tiptap's deferred rAF blur but ACKed before blur completion, while native layout now protects focused/keyboard-active body. Followup makes ACK wait for actual DOM/editor blur with bounded timeout, FIFO recovery and session/revision/generation/composition revalidation; no synthetic unfocused state or forced IME commit. Corrected candidate build and regression pending; visual approval is not functional closure.
+
+#### Corrected candidate result — 05:09 UTC
+- Build cbbd7bd9-2139-47eb-8a33-913a9e246108 succeeded (Xcode27.2); installed/launched on shared Duo iOS27.1.
+- Test1f9e7ce1-219d-4058-bdf8-a7ce67bf08c7: TypeScript check,21 web test files126/126 including11 new blur lifecycle cases, native102/102, UI2/2 passed. Core source full-page switch37.063s uses ordinary animations; theme persistence53.816s explicitly disables animations. Not a full ordinary-animation UI suite.
+- Actual saved rich fixture: visible body keyboard→native overflow→source header within878ms, source screenshot has no keyboard; returning to body then unfolding restored Paper comparison. Screen-only raw captures08/09/10 in above directory; latest source/compare also in `.airbuild/screenshots/parity-ack-{source,compare}_iphone-duo.png`.
+- Independent read-only review found no blocker. Pending-destruction/external-blur races are not separately tested. No native layout/visual changes, so visual approval226 stands per designer's scope.
+- Proven early-success ACK fixed and regression passed. Historical prolonged folded state resolved via same-process background/foreground and its full cause remains unproven; do not claim exhaustive Duo lifecycle coverage. Old paused physical/iCloud/IME/VoiceOver and warm-URL matters remain unchanged.

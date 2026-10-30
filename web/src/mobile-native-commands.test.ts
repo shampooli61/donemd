@@ -108,6 +108,84 @@ describe('native selection bookmarks', () => {
   });
 });
 
+describe('native keyboard dismissal', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('ACKs only after the mounted editor has actually lost DOM focus', async () => {
+    vi.useFakeTimers();
+    editor.view.focus();
+    expect(editor.isFocused).toBe(true);
+    expect(document.activeElement).toBe(editor.view.dom);
+    const before = editor.getJSON(), selection = editor.state.selection.toJSON();
+    const pending = send('keyboard.dismiss');
+    await Promise.resolve();
+    expect(results).toHaveLength(0);
+    expect(editor.isFocused).toBe(true);
+    await vi.advanceTimersByTimeAsync(20);
+    const result = await pending;
+    expect(result).toMatchObject({ success: true, state: { focused: false, composing: false } });
+    expect(document.activeElement).not.toBe(editor.view.dom);
+    expect(editor.getJSON()).toEqual(before);
+    expect(editor.state.selection.toJSON()).toEqual(selection);
+  });
+
+  it('times out a suspended frame, releases the FIFO and cancels the late blur', async () => {
+    vi.useFakeTimers();
+    editor.view.focus();
+    const frame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 123);
+    const cancel = vi.spyOn(window, 'cancelAnimationFrame');
+    const pending = send('keyboard.dismiss'), next = send('reader.info');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await pending).toMatchObject({ success: false, message: '键盘未能收起，请重试', state: { focused: true } });
+    expect((await next).success).toBe(true);
+    expect(results.map(result => result.success)).toEqual([false, true]);
+    expect(frame).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledWith(123);
+    expect(editor.isFocused).toBe(true);
+  });
+
+  it('fails rather than fabricating unfocused state when DOM blur is ineffective', async () => {
+    vi.useFakeTimers();
+    editor.view.focus();
+    vi.spyOn(editor.view.dom, 'blur').mockImplementation(() => {});
+    const pending = send('keyboard.dismiss');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await pending).toMatchObject({ success: false, state: { focused: true } });
+  });
+
+  it.each(['generation', 'identity', 'revision', 'composition'])('guards %s changes before the deferred DOM blur', async change => {
+    vi.useFakeTimers();
+    editor.view.focus();
+    const blur = vi.spyOn(editor.view.dom, 'blur');
+    const pending = send('keyboard.dismiss');
+    await Promise.resolve();
+    if (change === 'generation') editor.view.dom.dispatchEvent(new Event('mobile-document-loaded'));
+    if (change === 'identity') native.info({ identity: 'file-b', source: '' });
+    if (change === 'revision') revision++;
+    if (change === 'composition') Object.defineProperty(editor.view, 'composing', { configurable: true, value: true });
+    await vi.advanceTimersByTimeAsync(20);
+    const result = await pending;
+    expect(result.success).toBe(false);
+    expect(result.message).toContain(change === 'composition' ? '输入' : '会话');
+    expect(blur).not.toHaveBeenCalled(); expect(editor.isFocused).toBe(true);
+  });
+
+  it.each(['generation', 'identity', 'revision', 'composition'])('revalidates %s after awaiting blur', async change => {
+    vi.useFakeTimers();
+    editor.view.focus();
+    editor.on('blur', () => {
+      if (change === 'generation') editor.view.dom.dispatchEvent(new Event('mobile-document-loaded'));
+      if (change === 'identity') native.info({ identity: 'file-b', source: '' });
+      if (change === 'revision') revision++;
+      if (change === 'composition') Object.defineProperty(editor.view, 'composing', { configurable: true, value: true });
+    });
+    const pending = send('keyboard.dismiss');
+    await vi.advanceTimersByTimeAsync(20);
+    const result = await pending;
+    expect(result.success).toBe(false);
+    expect(result.message).toContain(change === 'composition' ? '输入' : '会话');
+  });
+});
+
 describe('native command gates and ordering', () => {
   it('ACKs synchronous commands and failures in FIFO order without loading content', async () => {
     editor.commands.setTextSelection({ from: 1, to: 6 }); const token = await capture(); results.length = 0;

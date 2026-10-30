@@ -167,6 +167,35 @@ export function createNativeCommands(editor: Editor, options: Options) {
     const n = Number(value); if (!Number.isInteger(n) || n < min || n > max) throw new Error(`数值应在 ${min}–${max} 之间`); return n;
   }
   function rich(content: JSONContent) { return commitRichNode(editor, content); }
+  function dismissKeyboard(validate: () => void): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let frame: number | undefined;
+      const unfocused = () => !editor.isFocused && !editor.view.dom.contains(document.activeElement);
+      const cleanup = () => {
+        clearTimeout(timeout);
+        if (frame !== undefined) cancelAnimationFrame(frame);
+        editor.off('blur', blurred);
+      };
+      const blurred = () => { if (unfocused()) { cleanup(); resolve(); } };
+      // Hidden webviews may never run rAF. Do not leave the native FIFO blocked.
+      const timeout = setTimeout(() => { cleanup(); reject(new Error('键盘未能收起，请重试')); }, 500);
+      editor.on('blur', blurred);
+      if (unfocused()) { cleanup(); resolve(); return; }
+      // Tiptap's blur command defers an unconditional DOM blur to rAF. Guard the
+      // deferred side effect too, so a new session or IME is never blurred.
+      frame = requestAnimationFrame(() => {
+        try {
+          validate();
+          editor.view.dom.blur();
+          validate();
+          if (unfocused()) {
+            window.getSelection()?.removeAllRanges();
+            blurred();
+          }
+        } catch (error) { cleanup(); reject(error); }
+      });
+    });
+  }
   async function execute(command: NativeEditorCommand): Promise<NativeEditorResult> {
     const reply: NativeEditorResult = { requestId: typeof command?.requestId === 'string' ? command.requestId : '', success: false };
     try {
@@ -197,7 +226,17 @@ export function createNativeCommands(editor: Editor, options: Options) {
           window.dispatchEvent(new Event('resize')); break;
         case 'selection.capture': reply.selectionToken = capture(); break;
         case 'selection.release': if (command.selectionToken) bookmarks.delete(command.selectionToken); break;
-        case 'keyboard.dismiss': editor.commands.blur(); break;
+        case 'keyboard.dismiss': {
+          const startGeneration = generation;
+          const validate = () => {
+            if (editor.isDestroyed || generation !== startGeneration || command.identity !== identity || command.revision !== options.revision()) throw new Error('文档会话已改变，请重新操作');
+            if (editor.view.composing) throw new Error('正在完成输入，请稍后重试');
+          };
+          await dismissKeyboard(validate);
+          validate();
+          if (editor.isFocused || editor.view.dom.contains(document.activeElement)) throw new Error('键盘未能收起，请重试');
+          break;
+        }
         case 'focus.restore':
           if (a.focus !== undefined && !['true', 'false'].includes(a.focus)) throw new Error('无效的焦点设置');
           // Selection restoration above is independent of keyboard activation.

@@ -27,3 +27,7 @@
 ## 保护与验收
 
 保持首次规范化同意、原文块、相邻资源、冲突/恢复/保存、身份/版本/快照保护。新增单元与界面回归覆盖布局边界、身份/版本隔离、只读镜像更新、主题系统深色与回滚、不改文档。真实折叠与输入法/辅助功能检查结果须分开记录；暂停的旧真机验收不因本决策自动通过，普通动画 UI 超时不以关闭动画的结果替代。
+
+### Explicit source switching and completed blur ACK
+
+`keyboard.dismiss` success now means actual DOM/editor blur, not merely that Tiptap scheduled its blur rAF. The deferred side effect and post-await continuation both validate document generation, identity, revision and composition. A suspended/ineffective blur fails after500ms, cancels its pending frame and releases FIFO; native active-body/IME gating remains unchanged. Layout, colors and toolbar arrangement are unchanged. This fixes the proven early-ACK path, not a claim that every fold/foreground lifecycle anomaly has a proven root cause.
