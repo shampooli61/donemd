@@ -25,7 +25,7 @@ export function findMatches(doc: PMNode, query: string): SearchMatch[] {
 
 export function createDocumentSearch(editor: Editor, unfold: (ordinal: number) => void) {
   const key = new PluginKey('documentSearch');
-  let query = '', current = 0, opened = false;
+  let query = '', current = 0, opened = false, native = false;
   const bar = document.createElement('div');
   bar.className = 'donemd-find'; bar.hidden = true;
   bar.setAttribute('role', 'search'); bar.setAttribute('aria-label', '文档内查找');
@@ -76,9 +76,10 @@ export function createDocumentSearch(editor: Editor, unfold: (ordinal: number) =
       (dom instanceof HTMLElement ? dom : dom.parentElement)?.scrollIntoView?.({ block: 'center' });
     });
   }
-  function open() { opened = true; bar.hidden = false; repaint(); input.focus(); input.select(); }
-  function close() { opened = false; bar.hidden = true; repaint(); editor.commands.focus(); }
-  input.addEventListener('input', () => { query = input.value; current = 0; navigate(0); });
+  function open() { opened = true; bar.hidden = native; repaint(); if (!native) { input.focus(); input.select(); } }
+  function close(focus = true) { opened = false; bar.hidden = true; repaint(); if (focus) editor.commands.focus(); }
+  input.addEventListener('input', event => { if ((event as InputEvent).isComposing) return; query = input.value; current = 0; navigate(0); });
+  input.addEventListener('compositionend', () => { query = input.value; current = 0; navigate(0); });
   bar.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
     if (e.key === 'Enter') { e.preventDefault(); navigate(e.shiftKey ? -1 : 1); }
@@ -88,5 +89,9 @@ export function createDocumentSearch(editor: Editor, unfold: (ordinal: number) =
   }
   window.addEventListener('keydown', keydown);
   editor.on('update', refreshCount);
-  return { open, close, destroy() { window.removeEventListener('keydown', keydown); editor.off('update', refreshCount); editor.unregisterPlugin(key); bar.remove(); } };
+  return { open, close, navigate,
+    setNative(value: boolean) { native = value; bar.hidden = native || !opened; },
+    setQuery(value: string) { query = value; input.value = value; current = 0; opened = true; bar.hidden = native; navigate(0); },
+    state: () => ({ searchQuery: query, searchCount: hits().length, searchCurrent: hits().length ? current + 1 : 0, searchActive: opened }),
+    destroy() { window.removeEventListener('keydown', keydown); editor.off('update', refreshCount); editor.unregisterPlugin(key); bar.remove(); } };
 }

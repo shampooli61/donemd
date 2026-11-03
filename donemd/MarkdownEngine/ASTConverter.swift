@@ -22,13 +22,94 @@ struct ASTConverter {
     }
 
     func convertDocument(_ document: Document) -> TiptapNode {
-        let blocks = document.children.compactMap { convertBlock($0) }
+        let blocks = convertChildren(of: document)
         // Tiptap's doc schema requires `block+`. Empty input ⇒ single empty paragraph.
         let content = blocks.isEmpty ? [TiptapNode(type: "paragraph")] : blocks
         return TiptapNode(type: "doc", content: content)
     }
 
     // MARK: Block-level
+
+    /// One Markdown unordered list can contain ordinary AND checkbox items,
+    /// but Tiptap's bulletList/taskList each require a homogeneous item type.
+    /// Expand it into consecutive runs rather than inventing checkboxes.
+    private func convertBlocks(_ markup: Markup) -> [TiptapNode] {
+        guard let list = markup as? UnorderedList else {
+            return convertBlock(markup).map { [$0] } ?? []
+        }
+        var runs: [TiptapNode] = []
+        for item in list.listItems {
+            let task = taskState(for: item)
+            let type = task == nil ? "bulletList" : "taskList"
+            let converted: TiptapNode
+            if let task = task {
+                converted = convertTaskItem(item, checked: task.checked, markerLength: task.markerLength)
+            } else {
+                converted = convertListItem(item)
+            }
+            if runs.last?.type == type {
+                runs[runs.count - 1].content?.append(converted)
+            } else {
+                runs.append(TiptapNode(type: type, content: [converted]))
+            }
+        }
+        return runs
+    }
+
+    /// Some swift-markdown/cmark versions leave checkbox markers as ordinary
+    /// paragraph text inside blockquotes (including callouts). Recover only a
+    /// literal GFM marker at the first paragraph's source position. Checking
+    /// source as well as parsed text avoids promoting escaped/entity brackets,
+    /// inline code, links, or later paragraphs into actual tasks.
+    private func taskState(for item: ListItem) -> (checked: Bool, markerLength: Int)? {
+        if let checkbox = item.checkbox {
+            return (checkbox == .checked, 0)
+        }
+        guard let paragraph = Array(item.children).first as? Paragraph,
+              let location = paragraph.range?.lowerBound,
+              location.line >= 1, location.line <= sourceLines.count else { return nil }
+        let bytes = Array(sourceLines[location.line - 1].utf8)
+        let offset = location.column - 1
+        guard offset >= 0, offset <= bytes.count else { return nil }
+        let source = String(decoding: bytes.dropFirst(offset), as: UTF8.self)
+        guard let sourceMarker = taskMarker(in: source),
+              let first = convertInline(of: paragraph).first,
+              first.type == "text", (first.marks ?? []).isEmpty,
+              let text = first.text, let parsedMarker = taskMarker(in: text),
+              sourceMarker.checked == parsedMarker.checked else { return nil }
+        return parsedMarker
+    }
+
+    private func taskMarker(in text: String) -> (checked: Bool, markerLength: Int)? {
+        guard text.hasPrefix("[ ]") || text.hasPrefix("[x]") || text.hasPrefix("[X]") else { return nil }
+        let suffix = text.dropFirst(3)
+        guard suffix.isEmpty || suffix.first == " " || suffix.first == "\t" else { return nil }
+        let whitespace = suffix.prefix { $0 == " " || $0 == "\t" }
+        return (!text.hasPrefix("[ ]"), 3 + whitespace.count)
+    }
+
+    /// Used by every block container, including callouts. Adjacent unordered
+    /// runs of the same type can also occur across Markdown list boundaries
+    /// (e.g. a switch from `*` to `-`). Canonical Markdown emits `-` for both,
+    /// so reparsing merges them. Normalize that boundary now, preserving item
+    /// order, to avoid shifted sibling indexes and an extra save to stabilize.
+    /// Ordered lists are deliberately NOT merged: their start is meaningful.
+    private func convertChildren(of markup: Markup) -> [TiptapNode] {
+        normalizeListRuns(markup.children.flatMap { convertBlocks($0) })
+    }
+
+    private func normalizeListRuns(_ blocks: [TiptapNode]) -> [TiptapNode] {
+        var result: [TiptapNode] = []
+        for block in blocks {
+            if (block.type == "bulletList" || block.type == "taskList"),
+               result.last?.type == block.type {
+                result[result.count - 1].content?.append(contentsOf: block.content ?? [])
+            } else {
+                result.append(block)
+            }
+        }
+        return result
+    }
 
     private func convertBlock(_ markup: Markup) -> TiptapNode? {
         switch markup {
@@ -74,23 +155,8 @@ struct ASTConverter {
             if let calloutNode = convertCalloutIfMatched(bq) {
                 return calloutNode
             }
-            let inner = bq.children.compactMap { convertBlock($0) }
+            let inner = convertChildren(of: bq)
             return TiptapNode(type: "blockquote", content: inner)
-        case let ul as UnorderedList:
-            // GFM task list: any list whose items carry a `[ ]` / `[x]`
-            // checkbox becomes a Tiptap taskList. Items missing a checkbox
-            // are coerced to unchecked task items so the list stays
-            // schema-consistent (Tiptap rejects mixed listItem/taskItem).
-            if ul.listItems.contains(where: { $0.checkbox != nil }) {
-                return TiptapNode(
-                    type: "taskList",
-                    content: ul.listItems.map { convertTaskItem($0) }
-                )
-            }
-            return TiptapNode(
-                type: "bulletList",
-                content: ul.listItems.map { convertListItem($0) }
-            )
         case let ol as OrderedList:
             var attrs: [String: AttrValue]? = nil
             if ol.startIndex != 1 {
@@ -351,9 +417,7 @@ struct ASTConverter {
 
         let disallowed: Set<String> = ["codeBlock", "table", "horizontalRule"]
         for child in bqChildren.dropFirst() {
-            guard let block = convertBlock(child) else { continue }
-            if disallowed.contains(block.type) { continue }
-            content.append(block)
+            content.append(contentsOf: convertBlocks(child).filter { !disallowed.contains($0.type) })
         }
 
         // Tiptap schema: callout content is `(paragraph | … )+` — at least
@@ -366,18 +430,28 @@ struct ASTConverter {
         return TiptapNode(
             type: "callout",
             attrs: ["type": .string(type)],
-            content: content
+            content: normalizeListRuns(content)
         )
     }
 
     private func convertListItem(_ item: ListItem) -> TiptapNode {
-        let inner = item.children.compactMap { convertBlock($0) }
+        let inner = convertChildren(of: item)
         return TiptapNode(type: "listItem", content: inner)
     }
 
-    private func convertTaskItem(_ item: ListItem) -> TiptapNode {
-        let checked = item.checkbox == .checked
-        let inner = item.children.compactMap { convertBlock($0) }
+    private func convertTaskItem(_ item: ListItem, checked: Bool, markerLength: Int) -> TiptapNode {
+        var inner = convertChildren(of: item)
+        if markerLength > 0, var paragraph = inner.first,
+           var inline = paragraph.content, let first = inline.first {
+            let remainder = String((first.text ?? "").dropFirst(markerLength))
+            if remainder.isEmpty {
+                inline.removeFirst()
+            } else {
+                inline[0].text = remainder
+            }
+            paragraph.content = inline
+            inner[0] = paragraph
+        }
         return TiptapNode(
             type: "taskItem",
             attrs: ["checked": .bool(checked)],

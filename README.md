@@ -130,7 +130,13 @@ https://github.com/user-attachments/assets/22e79c48-d9c7-476a-9af8-1c6561a1447c
 - **AI 功能的 API key 只存在你本机**（macOS 钥匙串 / Keychain，加密存储）。它**不会上传到任何服务器、也不经过我手里**——AI 请求从你的 Mac **直连你选择的服务商**（DeepSeek / Gemini / OpenAI / Claude / MiMo），用的是**你自己账号申请的 key**。
 - **飞书用的是你自己的账号授权**：通过飞书官方 OAuth 在系统浏览器里登录，同步请求直连飞书官方接口。
 - **飞书的 App ID、App Secret 和登录凭据同样只存你本机 Keychain**，不上传、不经手。
-- **文件永远只在你的磁盘上**：一份文档就是一个本地 `.md` 文件，应用不建云端副本、不建索引、不做云同步。
+- **文件由你选择存放位置**：一份文档就是一个 `.md` 文件，应用不建自有云端副本或索引。选择 iCloud Drive 文件夹时，文件与附件由 Apple 的系统服务同步；Done.md 不运营同步服务器。
+
+## iOS 文档端（开发中）
+
+正在开发 iPhone / iPad 完整文档阅读与写作：复用 Visual 编辑器，源码保持只读，支持图片与视频；通过用户选择的 iCloud Drive 文件夹与 Mac 共享 `.md + assets/`。首版不包含 AI 或飞书操作。
+
+开发范围、进展与验收边界见 [iOS PRD](docs/prd/ios-document-editor.md)、[实施进展](docs/issues/ios-progress.md) 和 [构建说明](BUILD.md)。当前已有模拟器验证，真实 iCloud 双机同步仍待验收，尚未发布 iOS 安装包。
 
 ## 系统要求（Requirements）
 

@@ -467,23 +467,48 @@ final class DonemdDocument: NSDocument {
         }
     }
 
+    private var externalPromptPending = false
     private func promptUserAboutExternalChange(url: URL) {
+        guard !externalPromptPending else { return }
+        externalPromptPending = true
+        guard let visual = visualCoordinator else {
+            showExternalChangeChoice(url: url)
+            externalPromptPending = false
+            return
+        }
+        visual.fetchCurrentDocumentState { [weak self] result in
+            guard let self else { return }
+            defer { self.externalPromptPending = false }
+            switch result {
+            case .success(let body):
+                self.parsedDocument.body = body
+                self.showExternalChangeChoice(url: url)
+            case .failure(let error):
+                let alert = NSAlert()
+                alert.messageText = "无法保护当前编辑内容"
+                alert.informativeText = "尚未加载外部版本。请先另存当前内容后重试。\n" + error.localizedDescription
+                alert.runModal()
+            }
+        }
+    }
+
+    private func showExternalChangeChoice(url: URL) {
         let alert = NSAlert()
         alert.messageText = "「\(url.lastPathComponent)」已被外部修改"
-        alert.informativeText = "你还有未保存的改动。要保留正在编辑的版本，还是加载磁盘上的新内容？"
+        alert.informativeText = "你还有未保存的修改。选择后会先在原文件夹保留本机和磁盘两份冲突副本，再继续；副本仍可使用相邻附件。"
         alert.addButton(withTitle: "保留我的修改")
         alert.addButton(withTitle: "加载磁盘版本")
         alert.addButton(withTitle: "取消")
-
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            // Keep my changes — do nothing. The next Cmd+S overwrites disk.
-            break
-        case .alertSecondButtonReturn:
-            silentlyRevert(to: url)
-        default:
-            // 取消 — do nothing. User can decide later.
-            break
+        let choice = alert.runModal()
+        guard choice == .alertFirstButtonReturn || choice == .alertSecondButtonReturn else { return }
+        do {
+            _ = try DocumentRecoveryStore.protectExternalEdit(local: MarkdownEngine.serialize(document: parsedDocument), for: url)
+            if choice == .alertSecondButtonReturn { silentlyRevert(to: url) }
+        } catch {
+            let failure = NSAlert()
+            failure.messageText = "未能保留冲突副本，未替换当前内容"
+            failure.informativeText = error.localizedDescription
+            failure.runModal()
         }
     }
 

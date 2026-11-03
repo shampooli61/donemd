@@ -157,7 +157,11 @@ struct MarkdownSerializer {
                 let blockLines = block.components(separatedBy: "\n")
                 for (lineIndex, line) in blockLines.enumerated() {
                     if blockIndex == 0 && lineIndex == 0 {
-                        lines.append(bullet + line)
+                        // A literal checkbox-looking prefix in an ordinary
+                        // item must stay ordinary after reparse (escaped/entity
+                        // source brackets have already become plain text).
+                        let firstLine = !ordered && startsWithTaskMarker(line) ? "\\" + line : line
+                        lines.append(bullet + firstLine)
                     } else {
                         lines.append(line.isEmpty ? "" : indent + line)
                     }
@@ -171,13 +175,22 @@ struct MarkdownSerializer {
         return lines.joined(separator: "\n")
     }
 
+    private func startsWithTaskMarker(_ text: String) -> Bool {
+        guard text.hasPrefix("[ ]") || text.hasPrefix("[x]") || text.hasPrefix("[X]") else { return false }
+        let suffix = text.dropFirst(3)
+        return suffix.isEmpty || suffix.first == " " || suffix.first == "\t"
+    }
+
     private func serializeTaskList(_ list: TiptapNode) -> String {
         let items = list.content ?? []
         var lines: [String] = []
         for item in items {
             let checked = boolAttr(item.attrs, key: "checked") ?? false
             let bullet = "- [\(checked ? "x" : " ")] "
-            let indent = String(repeating: " ", count: bullet.count)
+            // GFM's checkbox belongs to paragraph content, not the list
+            // marker. Continuations are relative to "- " (two columns),
+            // otherwise a later paragraph/list can become indented code.
+            let indent = "  "
             let body = (item.content ?? []).compactMap { serializeBlock($0) }
             for (blockIndex, block) in body.enumerated() {
                 let blockLines = block.components(separatedBy: "\n")

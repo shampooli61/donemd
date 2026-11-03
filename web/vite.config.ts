@@ -21,7 +21,7 @@ const katexWoff2Only = (): Plugin => ({
   name: 'katex-woff2-only',
   enforce: 'pre',
   transform(code, id) {
-    if (!id.includes('katex') || !id.endsWith('.css')) return null;
+    if (!id.includes('katex') || !id.split('?')[0].endsWith('.css')) return null;
     // Drop `,url(...woff) format("woff")` and `,url(...ttf) format("truetype")`
     // (they always follow the woff2 entry, so the leading comma is safe to eat).
     const stripped = code.replace(
