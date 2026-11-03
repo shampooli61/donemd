@@ -19,7 +19,7 @@ struct DoneMobileApp: App {
     }
     var body: some Scene {
         WindowGroup {
-            NavigationStack { FolderView(folders: folders, folder: nil) }
+            MobileFolderBrowser(folders: folders)
                 .environmentObject(session)
                 .onOpenURL { url in Task { await session.receiveExternal(url) } }
                 .fullScreenCover(item: $session.opened, onDismiss: {
@@ -33,10 +33,24 @@ struct DoneMobileApp: App {
     }
 }
 
+/// Keep one appearance owner above navigation so pushing/popping folders cannot
+/// release another folder's override. This observes committed themes only.
+struct MobileFolderBrowser: View {
+    @ObservedObject var folders: FolderStore
+    @ObservedObject var themes = MobileThemeStore.shared
+
+    var body: some View {
+        NavigationStack { FolderView(folders: folders, folder: nil, themes: themes) }
+            .modifier(MobileWritingSurface(theme: themes.theme))
+    }
+}
+
 struct FolderView: View {
     @ObservedObject var folders: FolderStore
     @EnvironmentObject private var session: DocumentOpenCoordinator
     let folder: URL?
+    @ObservedObject var themes: MobileThemeStore
+    private var theme: MobileWritingTheme { themes.theme }
     @State private var entries: [URL] = []
     @State private var choosing = false
     @State private var query = ""
@@ -46,54 +60,67 @@ struct FolderView: View {
     var current: URL? { folder ?? folders.root }
     var body: some View {
         List {
-            if current == nil {
-                ContentUnavailableView("接着写你的文档", systemImage: "doc.text", description: Text("选择 iCloud Drive 中的文件夹，在 Mac 和手机上使用同一份 Markdown。"))
-                if session.pendingURL == nil {
-                    Button("选择文档文件夹") { choosing = true }
+            Group {
+                if current == nil {
+                    ContentUnavailableView("接着写你的文档", systemImage: "doc.text", description: Text("选择 iCloud Drive 中的文件夹，在 Mac 和手机上使用同一份 Markdown。"))
+                    if session.pendingURL == nil {
+                        Button("选择文档文件夹") { choosing = true }
+                    }
                 }
-            }
-            if let error = folders.error { Text(error).foregroundStyle(.red) }
-            if let error = session.error { Text(error).foregroundStyle(.red) }
-            if let pending = session.pendingURL {
-                Section("来自文件 App") {
-                    Text(pending.lastPathComponent)
-                    if session.needsFolderAuthorization {
-                        Text("进入此文档所在的文件夹后，点右上角“打开”授予访问权限。完成后将自动打开这份文档，无需再次选择文件。")
-                        Button("选择文档所在文件夹") { choosing = true }
+                if let error = folders.error { Text(error).foregroundStyle(.red) }
+                if let error = session.error { Text(error).foregroundStyle(.red) }
+                if let pending = session.pendingURL {
+                    Section("来自文件 App") {
+                        Text(pending.lastPathComponent)
+                        if session.needsFolderAuthorization {
+                            Text("进入此文档所在的文件夹后，点右上角“打开”授予访问权限。完成后将自动打开这份文档，无需再次选择文件。")
+                            Button("选择文档所在文件夹") { choosing = true }
+                        } else {
+                            Button("重试打开文档") { Task { await session.openPending() } }
+                            if session.canReauthorizePending {
+                                Button("重新授权文档所在文件夹") { choosing = true }
+                            }
+                        }
+                        Button("取消打开", role: .cancel) { session.cancelPending() }
+                    }.disabled(session.loading)
+                }
+                ForEach(entries.filter { query.isEmpty || $0.lastPathComponent.localizedCaseInsensitiveContains(query) }, id: \.self) { url in
+                    if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                        NavigationLink { FolderView(folders: folders, folder: url, themes: themes) } label: {
+                            Label {
+                                Text(url.lastPathComponent).foregroundStyle(theme.foreground)
+                            } icon: {
+                                Image(systemName: "folder").foregroundStyle(theme.accent)
+                            }.frame(minHeight: 44)
+                        }
                     } else {
-                        Button("重试打开文档") { Task { await session.openPending() } }
-                        if session.canReauthorizePending {
-                            Button("重新授权文档所在文件夹") { choosing = true }
-                        }
+                        Button { open(url) } label: { Label(url.deletingPathExtension().lastPathComponent, systemImage: "doc.text").foregroundStyle(theme.accent).frame(minHeight: 44) }
+                            .contextMenu {
+                                Button("重命名") { renameError = nil; newName = url.deletingPathExtension().lastPathComponent; renaming = url }
+                                Button("创建副本") { do { _ = try folders.duplicate(url); reload() } catch { folders.error = error.localizedDescription } }
+                                ShareLink(item: url) { Text("分享 Markdown 文件") }
+                            }
                     }
-                    Button("取消打开", role: .cancel) { session.cancelPending() }
-                }.disabled(session.loading)
-            }
-            ForEach(entries.filter { query.isEmpty || $0.lastPathComponent.localizedCaseInsensitiveContains(query) }, id: \.self) { url in
-                if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                    NavigationLink { FolderView(folders: folders, folder: url) } label: { Label(url.lastPathComponent, systemImage: "folder").frame(minHeight: 44) }
-                } else {
-                    Button { open(url) } label: { Label(url.deletingPathExtension().lastPathComponent, systemImage: "doc.text").frame(minHeight: 44) }
-                        .contextMenu {
-                            Button("重命名") { renameError = nil; newName = url.deletingPathExtension().lastPathComponent; renaming = url }
-                            Button("创建副本") { do { _ = try folders.duplicate(url); reload() } catch { folders.error = error.localizedDescription } }
-                            ShareLink(item: url) { Text("分享 Markdown 文件") }
+                }
+                if current != nil && !session.loading {
+                    if entries.isEmpty {
+                        ContentUnavailableView {
+                            Label("文件夹里还没有文档", systemImage: "doc")
+                        } actions: {
+                            Button("新建文档") { createDocument() }
                         }
-                }
-            }
-            if current != nil && !session.loading {
-                if entries.isEmpty {
-                    ContentUnavailableView {
-                        Label("文件夹里还没有文档", systemImage: "doc")
-                    } actions: {
-                        Button("新建文档") { createDocument() }
+                    } else if !query.isEmpty && !entries.contains(where: { $0.lastPathComponent.localizedCaseInsensitiveContains(query) }) {
+                        ContentUnavailableView("没有匹配的文件名", systemImage: "magnifyingglass")
                     }
-                } else if !query.isEmpty && !entries.contains(where: { $0.lastPathComponent.localizedCaseInsensitiveContains(query) }) {
-                    ContentUnavailableView("没有匹配的文件名", systemImage: "magnifyingglass")
                 }
+                if session.loading { ProgressView("正在打开文档…") }
             }
-            if session.loading { ProgressView("正在打开文档…") }
+            .listRowBackground(theme.folderRowBackground)
+            .listRowSeparatorTint(theme.folderSeparator)
         }
+        .scrollContentBackground(.hidden)
+        .background(theme.folderBackground)
+        .foregroundStyle(theme.foreground, theme.folderSecondary)
         .navigationTitle(current?.lastPathComponent ?? "马上做完")
         .searchable(text: $query, prompt: "按文件名查找")
         .toolbar {
@@ -121,10 +148,9 @@ struct FolderView: View {
             case .failure(let error): session.error = "无法选择文件夹：\(error.localizedDescription)。请重试。"
             }
         }
-        .alert("重命名文档", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("文档名称", text: $newName)
-            Button("取消", role: .cancel) { renaming = nil }
-            Button("确定") {
+        .background(MobileRenameAlert(theme: theme,
+            isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
+            name: $newName, message: renameError ?? "输入新的文档名称。") {
                 guard let url = renaming else { return }
                 do { _ = try folders.rename(url, to: newName); reload(); renaming = nil }
                 catch {
@@ -132,8 +158,7 @@ struct FolderView: View {
                     renaming = nil
                     DispatchQueue.main.async { renaming = url }
                 }
-            }.disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        } message: { Text(renameError ?? "输入新的文档名称。") }
+            }.frame(width: 0, height: 0))
         .refreshable { reload() }
         .task { reload() }
         .onChange(of: folders.root) { _, _ in reload() }

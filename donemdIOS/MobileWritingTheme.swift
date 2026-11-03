@@ -21,6 +21,36 @@ enum MobileWritingTheme: String, CaseIterable, Identifiable {
     var foreground: Color {
         switch self { case .system: return Color(uiColor: .label); case .paper: return color(0x3A332B); case .night: return color(0xB8C0CC) }
     }
+    // Directory surfaces share the writing palette, with a distinct grouped row.
+    var folderBackground: Color {
+        switch self {
+        case .system: return Color(uiColor: .systemGroupedBackground)
+        case .paper: return background
+        case .night: return background
+        }
+    }
+    var folderRowBackground: Color {
+        switch self {
+        case .system: return Color(uiColor: .secondarySystemGroupedBackground)
+        case .paper: return color(0xEEE7DD)
+        case .night: return color(0x202733)
+        }
+    }
+    var folderSecondary: Color {
+        switch self {
+        case .system: return Color(uiColor: .secondaryLabel)
+        // #7A6D58 is only 4.12:1 on the grouped paper row; use primary text.
+        case .paper: return foreground
+        case .night: return color(0x929DAD)
+        }
+    }
+    var folderSeparator: Color {
+        switch self {
+        case .system: return Color(uiColor: .separator)
+        case .paper: return color(0xDED6CB)
+        case .night: return color(0x303744)
+        }
+    }
     /// Text-safe accent; paper's stronger fill color is not used for small text.
     var accent: Color {
         switch self {
@@ -233,6 +263,90 @@ struct MobileWritingAppearance: UIViewRepresentable {
         func releaseAppearance() {
             stopObservingWindow()
             releaseOwner()
+        }
+    }
+}
+
+/// Native rename alert owns its appearance; no presentation preference escapes
+/// into the browser or the system file importer.
+struct MobileRenameAlert: UIViewControllerRepresentable {
+    let theme: MobileWritingTheme
+    @Binding var isPresented: Bool
+    @Binding var name: String
+    let message: String
+    let confirm: () -> Void
+
+    func makeUIViewController(context: Context) -> Presenter { Presenter() }
+    func updateUIViewController(_ controller: Presenter, context: Context) {
+        controller.configuration = self
+        controller.scheduleUpdate()
+    }
+    static func dismantleUIViewController(_ controller: Presenter, coordinator: ()) {
+        controller.configuration = nil
+        controller.alert?.dismiss(animated: false)
+    }
+
+    final class Presenter: UIViewController {
+        var configuration: MobileRenameAlert?
+        private(set) var alert: UIAlertController?
+        private var confirmAction: UIAlertAction?
+        private var transitioning = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            scheduleUpdate()
+        }
+        func scheduleUpdate() {
+            DispatchQueue.main.async { [weak self] in self?.updatePresentation() }
+        }
+        private func updatePresentation() {
+            guard let configuration, view.window != nil, !transitioning else { return }
+            if let alert {
+                alert.overrideUserInterfaceStyle = configuration.theme.interfaceStyle
+                alert.view.tintColor = UIColor(configuration.theme.accent)
+                if !configuration.isPresented {
+                    transitioning = true
+                    alert.dismiss(animated: true) { [weak self] in
+                        self?.alert = nil
+                        self?.transitioning = false
+                        self?.scheduleUpdate()
+                    }
+                }
+                return
+            }
+            guard configuration.isPresented else { return }
+            let alert = UIAlertController(title: "重命名文档", message: configuration.message, preferredStyle: .alert)
+            alert.overrideUserInterfaceStyle = configuration.theme.interfaceStyle
+            alert.view.tintColor = UIColor(configuration.theme.accent)
+            alert.addTextField { [weak self] field in
+                field.placeholder = "文档名称"
+                field.text = configuration.name
+                field.addTarget(self, action: #selector(Self.nameChanged(_:)), for: .editingChanged)
+            }
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self] _ in self?.finish(confirm: false) })
+            let action = UIAlertAction(title: "确定", style: .default) { [weak self] _ in self?.finish(confirm: true) }
+            action.isEnabled = !configuration.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            alert.addAction(action)
+            confirmAction = action
+            self.alert = alert
+            present(alert, animated: true)
+        }
+        @objc private func nameChanged(_ field: UITextField) {
+            configuration?.name = field.text ?? ""
+            confirmAction?.isEnabled = !(field.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        private func finish(confirm: Bool) {
+            // Let native dismissal finish before a failed rename can re-present.
+            transitioning = true
+            dismiss(animated: true) { [weak self] in
+                guard let self else { return }
+                self.alert = nil
+                self.confirmAction = nil
+                self.transitioning = false
+                if confirm { self.configuration?.confirm() }
+                else { self.configuration?.isPresented = false }
+                self.scheduleUpdate()
+            }
         }
     }
 }

@@ -31,3 +31,11 @@
 ### Explicit source switching and completed blur ACK
 
 `keyboard.dismiss` success now means actual DOM/editor blur, not merely that Tiptap scheduled its blur rAF. The deferred side effect and post-await continuation both validate document generation, identity, revision and composition. A suspended/ineffective blur fails after500ms, cancels its pending frame and releases FIFO; native active-body/IME gating remains unchanged. Layout, colors and toolbar arrangement are unchanged. This fixes the proven early-ACK path, not a claim that every fold/foreground lifecycle anomaly has a proven root cause.
+
+## 2026-11-03 目录主题边界纠正
+
+用户真机反馈245显示纸质编辑页返回系统黑底蓝字目录，不能视为符合主题范围。主题现覆盖应用自有根目录/子目录、搜索/空态、原生导航/菜单与重命名提示；目录不铺正文纹理、不改变布局或增加主题入口。目录只观察已提交的 MobileThemeStore，不参与正文/源码 ACK 事务、不形成第二份偏好；稳定的导航根复用 MobileWritingSurface，避免子目录 push/pop 竞争外观所有权。系统文件选择、分享和权限界面保留系统控件，只继承平台支持的外观，不重绘 Files 应用。
+
+目录页面/行面分别为纸质 F8F4EE/EEE7DD、夜色171C26/202733，跟随系统为 systemGroupedBackground/secondarySystemGroupedBackground；文件按钮使用现有主题强调色，文件夹名保持主文字并强调图标。纸质次文字7A6D58在分组行面仅4.12:1，按设计降级为主文字色，不沿用正文纸底的对比结论。导航栏保留原生材质。主题事务、文档保存/权限/身份/版本/组合输入协议不变。
+
+原生重命名 alert 在仅设置承载控制器外观时仍可能采用系统键盘/标题配色。曾尝试向 SwiftUI 发布具体 preferredColorScheme，但真实 WindowGroup 下 Night→System 会反馈锁定深色（托管窗口单元测试不能覆盖此现象），因此此方案撤回，不作为交付实现。重命名外观必须局限于自身原生弹窗，不更改窗口或主题权威。

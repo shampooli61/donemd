@@ -190,6 +190,106 @@ final class MobileWritingAppearanceTests: XCTestCase {
         XCTAssertEqual(workspace.overrideUserInterfaceStyle, .unspecified)
     }
 
+    private final class AlertState: ObservableObject {
+        @Published var presented = false
+    }
+
+    private struct BrowserAlertSurface: View {
+        @ObservedObject var selection: Selection
+        @ObservedObject var alert: AlertState
+        @State private var name = "Document"
+        var body: some View {
+            NavigationStack {
+                List { Text("Document") }
+                    .background(MobileRenameAlert(theme: selection.theme,
+                        isPresented: $alert.presented, name: $name,
+                        message: "输入新的文档名称。") { alert.presented = false }
+                        .frame(width: 0, height: 0))
+            }
+            .modifier(MobileWritingSurface(theme: selection.theme))
+        }
+    }
+
+    func testBrowserNativeRenameAlertUsesThemeAndSystemTracksWindow() async {
+        let selection = Selection()
+        selection.theme = .paper
+        let alertState = AlertState()
+        let host = UIHostingController(rootView: BrowserAlertSurface(selection: selection, alert: alertState))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.overrideUserInterfaceStyle = .dark
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+        window.layoutIfNeeded()
+        host.view.layoutIfNeeded()
+
+        for (theme, system, expected) in [
+            (MobileWritingTheme.paper, UIUserInterfaceStyle.dark, UIUserInterfaceStyle.light),
+            (.night, .light, .dark),
+            (.system, .light, .light),
+            (.system, .dark, .dark),
+            (.system, .light, .light),
+        ] {
+            window.overrideUserInterfaceStyle = system
+            selection.theme = theme
+            // This non-key UIWindow has no app presentation/layout driver.
+            // Flush trait propagation as in the existing live-system tests;
+            // changing a window override alone can leave host traits cached.
+            window.layoutIfNeeded()
+            host.view.layoutIfNeeded()
+            let effective = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                host.traitCollection.userInterfaceStyle == expected
+            }, object: nil)
+            effective.expectationDescription = "Browser theme=\(theme.rawValue), system=\(system.rawValue), expected=\(expected.rawValue)"
+            await fulfillment(of: [effective], timeout: 3)
+            XCTAssertEqual(host.overrideUserInterfaceStyle, theme.interfaceStyle,
+                           "Root override for \(theme.rawValue), system=\(system.rawValue)")
+            alertState.presented = true
+            let presented = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let alert = host.presentedViewController as? UIAlertController else { return false }
+                return alert.traitCollection.userInterfaceStyle == expected &&
+                    alert.textFields?.first?.traitCollection.userInterfaceStyle == expected
+            }, object: nil)
+            presented.expectationDescription = "Rename alert theme=\(theme.rawValue), system=\(system.rawValue), expected=\(expected.rawValue)"
+            await fulfillment(of: [presented], timeout: 3)
+            XCTAssertEqual(window.overrideUserInterfaceStyle, system, "Browser must not override the window")
+            alertState.presented = false
+            let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                host.presentedViewController == nil
+            }, object: nil)
+            await fulfillment(of: [dismissed], timeout: 3)
+        }
+    }
+
+    func testFolderBrowserUsesPersistedThemeAtLaunchWithoutWritingPreference() async {
+        for theme in MobileWritingTheme.allCases {
+            let suite = "FolderAppearance-" + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defaults.set(theme.rawValue, forKey: MobileThemeStore.preferenceKey)
+            let themes = MobileThemeStore(defaults: defaults)
+            let folders = FolderStore()
+            let session = DocumentOpenCoordinator(folders: folders)
+            let host = UIHostingController(rootView:
+                MobileFolderBrowser(folders: folders, themes: themes).environmentObject(session))
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            window.overrideUserInterfaceStyle = .dark
+            window.rootViewController = host
+            window.isHidden = false
+            window.layoutIfNeeded()
+            host.view.layoutIfNeeded()
+            let applied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                host.overrideUserInterfaceStyle == theme.interfaceStyle &&
+                    host.traitCollection.userInterfaceStyle == (theme == .paper ? .light : .dark)
+            }, object: nil)
+            await fulfillment(of: [applied], timeout: 3)
+            XCTAssertEqual(defaults.string(forKey: MobileThemeStore.preferenceKey), theme.rawValue)
+            XCTAssertFalse(themes.applying, "Browsing must not initiate a theme transaction")
+            window.isHidden = true
+            window.rootViewController = nil
+            defaults.removePersistentDomain(forName: suite)
+        }
+    }
+
     func testContainmentTargetsPresentationAndReleasesOverrideWhenRemoved() {
         let presentation = UIViewController()
         let nested = UIViewController()
